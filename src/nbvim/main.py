@@ -1,15 +1,18 @@
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Button, Static, TextArea
+from textual.binding import Binding
+from textual.widgets import Static, TextArea
 
 from .constants import CSS
 
 
 class NbVim(App):
     CSS = CSS
+    BINDINGS = [
+        Binding("b", "add_cell", "Add cell", priority=True),
+    ]
 
     def compose(self) -> ComposeResult:
-        yield Button("Add cell", id="add-cell")
         with VerticalScroll(id="cells"):
             yield self.create_cell()
 
@@ -20,9 +23,8 @@ class NbVim(App):
             classes="cell",
         )
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "add-cell":
-            self.query_one("#cells").mount(self.create_cell())
+    def action_add_cell(self) -> None:
+        self.query_one("#cells").mount(self.create_cell())
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Grow the cell to fit all logical and wrapped lines."""

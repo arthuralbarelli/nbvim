@@ -5,6 +5,7 @@ CSS = """
 
 .cell {
     height: auto;
+    margin-bottom: 1;
 }
 
 .marker {
