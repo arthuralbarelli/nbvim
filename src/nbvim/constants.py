@@ -6,7 +6,7 @@ CSS = """
 #marker {
     width: 5;
     min-width: 5;
-    padding: 0 1;
+    padding: 1 1;
 }
 
 TextArea {
