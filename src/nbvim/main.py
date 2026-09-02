@@ -30,19 +30,29 @@ class NbVim(App):
             classes="cell",
         )
 
-    def action_add_cell(self) -> None:
-        self.query_one("#cells").mount(self.create_cell())
+    def get_focused_cell(self) -> Cell | None:
+        node = self.focused
+        while node is not None:
+            if isinstance(node, Cell):
+                return node
+            node = node.parent
+        return None
+
+    async def action_add_cell(self) -> None:
+        cell = self.create_cell()
+        focused_cell = self.get_focused_cell()
+        cells = self.query_one("#cells")
+
+        if focused_cell is None:
+            await cells.mount(cell)
+        else:
+            await cells.mount(cell, after=focused_cell)
+
+        cell.query_one(TextArea).focus()
 
     def action_delete_cell(self) -> None:
         """Delete the cell containing the focused widget."""
-        focused = self.focused
-        if focused is None:
-            return
-
-        cell = focused
-        while cell is not None and "cell" not in cell.classes:
-            cell = cell.parent
-
+        cell = self.get_focused_cell()
         cells = list(self.query(".cell"))
         if cell is None or cell not in cells or len(cells) == 1:
             return
