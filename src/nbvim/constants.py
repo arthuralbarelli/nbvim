@@ -6,6 +6,11 @@ CSS = """
 .cell {
     height: auto;
     margin-bottom: 1;
+    border: solid transparent;
+}
+
+.cell:focus-within {
+    border: solid white;
 }
 
 .marker {
