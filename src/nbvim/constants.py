@@ -1,9 +1,13 @@
 CSS = """
-#editor-row {
+#cells {
+    height: 1fr;
+}
+
+.cell {
     height: auto;
 }
 
-#marker {
+.marker {
     width: 5;
     min-width: 5;
     padding: 1 1;
