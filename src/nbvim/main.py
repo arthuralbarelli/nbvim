@@ -18,7 +18,10 @@ class NbVim(App):
         visual_line_count = event.text_area.wrapped_document.height
         event.text_area.styles.height = max(4, visual_line_count + 2)
 
+def main() -> None:
+    NbVim().run()
+
+
 if __name__ == "__main__":
-    app = NbVim()
-    app.run()
+    main()
 
