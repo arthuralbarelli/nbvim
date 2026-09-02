@@ -2,26 +2,11 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Static, TextArea
 
+from .constants import CSS
+
 
 class NbVim(App):
-    CSS = """
-    #editor-row {
-        height: auto;
-    }
-
-    #marker {
-        width: 5;
-        min-width: 5;
-        padding: 0 1;
-    }
-
-    TextArea {
-        width: 1fr;
-        height: 4;
-        min-height: 4;
-        scrollbar-size: 0 0;
-    }
-    """
+    CSS = CSS
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="editor-row"):
