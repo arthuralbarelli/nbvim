@@ -17,9 +17,9 @@ class NbVim(App):
 
     TextArea {
         width: 1fr;
-        height: 3;
-        min-height: 3;
-        max-height: 15;
+        height: 4;
+        min-height: 4;
+        scrollbar-size: 0 0;
     }
     """
 
@@ -29,9 +29,9 @@ class NbVim(App):
             yield TextArea.code_editor(language="python")
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """Grow the editor as lines are added, up to its maximum height."""
-        line_count = max(3, event.text_area.text.count("\n") + 1)
-        event.text_area.styles.height = line_count
+        """Grow the editor to fit all logical and wrapped lines."""
+        visual_line_count = event.text_area.wrapped_document.height
+        event.text_area.styles.height = max(4, visual_line_count + 2)
 
 if __name__ == "__main__":
     app = NbVim()
