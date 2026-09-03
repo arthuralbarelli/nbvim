@@ -66,6 +66,9 @@ class CellContainer(VerticalScroll):
 
 class NbVim(App):
     CSS = CSS
+    _delete_pending = False
+    _delete_timer = None
+
     BINDINGS = [
         Binding("b", "add_cell", "Add cell", priority=True),
         Binding("d", "delete_cell", "Delete cell", priority=True),
@@ -78,7 +81,20 @@ class NbVim(App):
         await self.query_one(CellContainer).add_cell_after_focused()
 
     def action_delete_cell(self) -> None:
-        self.query_one(CellContainer).delete_focused_cell()
+        """Delete the focused cell after two consecutive presses of ``d``."""
+        if self._delete_pending:
+            self._delete_pending = False
+            if self._delete_timer is not None:
+                self._delete_timer.stop()
+                self._delete_timer = None
+            self.query_one(CellContainer).delete_focused_cell()
+        else:
+            self._delete_pending = True
+            self._delete_timer = self.set_timer(0.5, self._reset_delete)
+
+    def _reset_delete(self) -> None:
+        self._delete_pending = False
+        self._delete_timer = None
 
 def main() -> None:
     NbVim().run()
