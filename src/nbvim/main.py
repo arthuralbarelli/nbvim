@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
 from textual.widgets import Static, TextArea
 
@@ -7,9 +7,20 @@ from .constants import CSS
 
 
 class Cell(Horizontal):
-    """A focusable container for a marker and a text area."""
+    """A focusable cell with a marker, editor, and language footer."""
 
     can_focus = True
+
+    def __init__(self, language: str = "python", **kwargs) -> None:
+        kwargs.setdefault("classes", "cell")
+        super().__init__(**kwargs)
+        self.language = language
+
+    def compose(self) -> ComposeResult:
+        yield Static("[ ]", classes="marker")
+        with Vertical(classes="cell-editor"):
+            yield TextArea.code_editor(language=self.language)
+            yield Static(self.language, classes="cell-footer")
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Grow the cell to fit all logical and wrapped lines."""
@@ -24,11 +35,7 @@ class CellContainer(VerticalScroll):
         yield self.create_cell()
 
     def create_cell(self) -> Cell:
-        return Cell(
-            Static("[ ]", classes="marker"),
-            TextArea.code_editor(language="python"),
-            classes="cell",
-        )
+        return Cell()
 
     def get_focused_cell(self) -> Cell | None:
         node = self.app.focused

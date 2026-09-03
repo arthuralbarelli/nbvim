@@ -9,6 +9,17 @@ CSS = """
     border: solid transparent;
 }
 
+.cell-editor {
+    width: 1fr;
+    height: auto;
+}
+
+.cell-footer {
+    height: 1;
+    content-align: right middle;
+    color: $text-muted;
+}
+
 .cell:focus-within {
     border: solid white;
 }
