@@ -60,6 +60,11 @@ class CellContainer(VerticalScroll):
 
         cell.focus()
 
+    def edit_focused_cell(self) -> None:
+        cell = self.get_focused_cell()
+        if cell is not None:
+            cell.query_one(TextArea).focus()
+
     def focus_relative_cell(self, offset: int) -> None:
         cells = list(self.query(".cell"))
         if not cells:
@@ -100,6 +105,7 @@ class NbVim(App):
         Binding("j", "move_down", "Move to next cell", priority=True),
         Binding("k", "move_up", "Move to previous cell", priority=True),
         Binding("a", "add_cell_above", "Add cell above", priority=True),
+        Binding("enter", "edit_cell", "Edit cell"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -116,6 +122,9 @@ class NbVim(App):
 
     async def action_add_cell_above(self) -> None:
         await self.query_one(CellContainer).add_cell_above_focused()
+
+    def action_edit_cell(self) -> None:
+        self.query_one(CellContainer).edit_focused_cell()
 
     def action_delete_cell(self) -> None:
         """Delete the focused cell after two consecutive presses of ``d``."""
