@@ -95,7 +95,7 @@ class CellContainer(VerticalScroll):
         if next_index == cell_index:
             next_index -= 1
 
-        cells[next_index].query_one(TextArea).focus()
+        cells[next_index].focus()
         cell.remove()
 
 
