@@ -15,8 +15,10 @@ CSS = """
 }
 
 .cell-footer {
+    width: 100%;
     height: 1;
-    content-align: right middle;
+    text-align: right;
+    padding-right: 1;
     color: $text-muted;
 }
 
@@ -31,7 +33,7 @@ CSS = """
 }
 
 TextArea {
-    width: 1fr;
+    width: 100%;
     height: 4;
     min-height: 4;
     scrollbar-size: 0 0;
