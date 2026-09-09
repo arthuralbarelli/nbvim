@@ -180,8 +180,9 @@ class NbVim(App):
             command_bar.value = ":"
             command_bar.styles.display = "block"
             command_bar.focus()
-            # Keep the command prefix intact; focus may otherwise select it.
-            command_bar.cursor_position = 1
+            # Set this after focus processing, which may otherwise select the
+            # whole value and replace the command prefix on the next keypress.
+            self.call_after_refresh(lambda: setattr(command_bar, "cursor_position", 1))
             event.stop()
             event.prevent_default()
 
