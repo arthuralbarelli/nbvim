@@ -1,9 +1,13 @@
+import argparse
+from pathlib import Path
+
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
 from textual.widgets import Static, TextArea
 
 from .constants import CSS
+from .model import CellModel, NotebookModel
 
 
 class Cell(Horizontal):
@@ -11,31 +15,47 @@ class Cell(Horizontal):
 
     can_focus = True
 
-    def __init__(self, language: str = "python", **kwargs) -> None:
+    def __init__(
+        self,
+        model: CellModel | None = None,
+        language: str = "python",
+        **kwargs,
+    ) -> None:
         kwargs.setdefault("classes", "cell")
         super().__init__(**kwargs)
+        self.model = model or CellModel()
         self.language = language
 
     def compose(self) -> ComposeResult:
         yield Static("[ ]", classes="marker")
         with Vertical(classes="cell-editor"):
-            yield TextArea.code_editor(language=self.language)
+            yield TextArea.code_editor(
+                text=self.model.source,
+                language=self.language,
+            )
             yield Static(self.language, classes="cell-footer")
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """Grow the cell to fit all logical and wrapped lines."""
+        """Keep the notebook model and cell height in sync with the editor."""
+        self.model.source = event.text_area.text
         visual_line_count = event.text_area.wrapped_document.height
         event.text_area.styles.height = max(4, visual_line_count + 2)
 
 
 class CellContainer(VerticalScroll):
-    """Container responsible for adding and removing cells."""
+    """Container responsible for displaying and editing notebook cells."""
+
+    def __init__(self, notebook: NotebookModel | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.notebook = notebook or NotebookModel.new()
 
     def compose(self) -> ComposeResult:
-        yield self.create_cell()
+        if not self.notebook.cells:
+            self.notebook.add_cell()
+        yield self.create_cell(self.notebook.cells[0])
 
-    def create_cell(self) -> Cell:
-        return Cell()
+    def create_cell(self, model: CellModel | None = None) -> Cell:
+        return Cell(model=model)
 
     def get_focused_cell(self) -> Cell | None:
         node = self.app.focused
@@ -46,8 +66,15 @@ class CellContainer(VerticalScroll):
         return None
 
     async def add_cell_after_focused(self) -> None:
-        cell = self.create_cell()
         focused_cell = self.get_focused_cell()
+        model = CellModel()
+        cell_index = (
+            self.notebook.cells.index(focused_cell.model) + 1
+            if focused_cell is not None
+            else len(self.notebook.cells)
+        )
+        self.notebook.add_cell(model, cell_index)
+        cell = self.create_cell(model)
 
         if focused_cell is None:
             await self.mount(cell)
@@ -57,8 +84,15 @@ class CellContainer(VerticalScroll):
         cell.focus()
 
     async def add_cell_above_focused(self) -> None:
-        cell = self.create_cell()
         focused_cell = self.get_focused_cell()
+        model = CellModel()
+        cell_index = (
+            self.notebook.cells.index(focused_cell.model)
+            if focused_cell is not None
+            else 0
+        )
+        self.notebook.add_cell(model, cell_index)
+        cell = self.create_cell(model)
 
         if focused_cell is None:
             await self.mount(cell)
@@ -103,6 +137,7 @@ class CellContainer(VerticalScroll):
             next_index -= 1
 
         cells[next_index].focus()
+        self.notebook.remove_cell(self.notebook.cells.index(cell.model))
         cell.remove()
 
 
@@ -110,6 +145,10 @@ class NbVim(App):
     CSS = CSS
     _delete_pending = False
     _delete_timer = None
+
+    def __init__(self, notebook: NotebookModel | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.notebook = notebook or NotebookModel.new()
 
     BINDINGS = [
         Binding("b", "add_cell", "Add cell", priority=True),
@@ -122,7 +161,7 @@ class NbVim(App):
     ]
 
     def compose(self) -> ComposeResult:
-        yield CellContainer(id="cells")
+        yield CellContainer(self.notebook, id="cells")
 
     async def action_add_cell(self) -> None:
         await self.query_one(CellContainer).add_cell_after_focused()
@@ -159,7 +198,31 @@ class NbVim(App):
         self._delete_timer = None
 
 def main() -> None:
-    NbVim().run()
+    parser = argparse.ArgumentParser(prog="nbvim")
+    parser.add_argument(
+        "notebook",
+        nargs="?",
+        type=Path,
+        help="notebook to open or create",
+    )
+    args = parser.parse_args()
+
+    if args.notebook is None:
+        NbVim().run()
+        return
+
+    notebook = (
+        NotebookModel.load(args.notebook)
+        if args.notebook.exists()
+        else NotebookModel.new()
+    )
+    # Create the file before starting the UI, so the requested path exists even
+    # if the user exits without making any changes.
+    notebook.save(args.notebook)
+    try:
+        NbVim(notebook).run()
+    finally:
+        notebook.save(args.notebook)
 
 
 if __name__ == "__main__":
