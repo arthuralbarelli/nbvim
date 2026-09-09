@@ -2,9 +2,10 @@ import argparse
 from pathlib import Path
 
 from textual.app import App, ComposeResult
+from textual.events import Key
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
-from textual.widgets import Static, TextArea
+from textual.widgets import Input, Static, TextArea
 
 from .constants import CSS
 from .model import CellModel, NotebookModel
@@ -52,7 +53,8 @@ class CellContainer(VerticalScroll):
     def compose(self) -> ComposeResult:
         if not self.notebook.cells:
             self.notebook.add_cell()
-        yield self.create_cell(self.notebook.cells[0])
+        for cell in self.notebook.cells:
+            yield self.create_cell(cell)
 
     def create_cell(self, model: CellModel | None = None) -> Cell:
         return Cell(model=model)
@@ -146,9 +148,16 @@ class NbVim(App):
     _delete_pending = False
     _delete_timer = None
 
-    def __init__(self, notebook: NotebookModel | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        notebook: NotebookModel | None = None,
+        path: Path | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self.notebook = notebook or NotebookModel.new()
+        self.path = path
+        self.save_on_exit = True
 
     BINDINGS = [
         Binding("b", "add_cell", "Add cell", priority=True),
@@ -162,6 +171,53 @@ class NbVim(App):
 
     def compose(self) -> ComposeResult:
         yield CellContainer(self.notebook, id="cells")
+        yield Input(id="command-bar")
+
+    def on_key(self, event: Key) -> None:
+        """Open the command bar when ``:`` is pressed in navigation mode."""
+        if event.character == ":" and not isinstance(self.focused, TextArea):
+            command_bar = self.query_one("#command-bar", Input)
+            command_bar.value = ":"
+            command_bar.styles.display = "block"
+            command_bar.focus()
+            # Keep the command prefix intact; focus may otherwise select it.
+            command_bar.cursor_position = 1
+            event.stop()
+            event.prevent_default()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        command = event.value
+        command_bar = event.input
+        command_bar.value = ""
+        command_bar.styles.display = "none"
+
+        if command.startswith(":"):
+            command = command[1:]
+
+        if command == "w":
+            self.save_notebook()
+        elif command == "q":
+            self.save_on_exit = False
+            self.exit()
+        elif command == "wq":
+            self.save_notebook()
+            self.exit()
+        elif command == "q!":
+            self.save_on_exit = False
+            self.exit()
+        else:
+            self.notify(f"Not an nbvim command: :{command}", severity="error")
+            command_bar.styles.display = "block"
+            command_bar.focus()
+            return
+
+        self.query_one(CellContainer).navigate_focused_cell()
+
+    def save_notebook(self) -> None:
+        if self.path is None:
+            self.notify("No notebook path specified", severity="error")
+            return
+        self.notebook.save(self.path)
 
     async def action_add_cell(self) -> None:
         await self.query_one(CellContainer).add_cell_after_focused()
@@ -220,9 +276,11 @@ def main() -> None:
     # if the user exits without making any changes.
     notebook.save(args.notebook)
     try:
-        NbVim(notebook).run()
+        app = NbVim(notebook, path=args.notebook)
+        app.run()
     finally:
-        notebook.save(args.notebook)
+        if app.save_on_exit:
+            notebook.save(args.notebook)
 
 
 if __name__ == "__main__":

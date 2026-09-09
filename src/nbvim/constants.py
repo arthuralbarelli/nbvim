@@ -38,4 +38,11 @@ TextArea {
     min-height: 4;
     scrollbar-size: 0 0;
 }
+
+#command-bar {
+    dock: bottom;
+    width: 100%;
+    height: 3;
+    display: none;
+}
 """
