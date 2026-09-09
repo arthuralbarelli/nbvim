@@ -7,7 +7,6 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
 from textual.widgets import Input, Static, TextArea
 
-from .constants import CSS
 from .model import CellModel, NotebookModel
 
 
@@ -144,7 +143,7 @@ class CellContainer(VerticalScroll):
 
 
 class NbVim(App):
-    CSS = CSS
+    CSS_PATH = Path(__file__).with_name("app.tcss")
     _delete_pending = False
     _delete_timer = None
 
