@@ -253,6 +253,7 @@ class NbVim(App):
         self._delete_pending = False
         self._delete_timer = None
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="nbvim")
     parser.add_argument(
@@ -285,4 +286,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -48,9 +48,7 @@ class CellModel:
                 source=self.source, metadata=self.metadata
             )
         if self.cell_type == "raw":
-            return nbformat.v4.new_raw_cell(
-                source=self.source, metadata=self.metadata
-            )
+            return nbformat.v4.new_raw_cell(source=self.source, metadata=self.metadata)
         raise ValueError(f"Unsupported cell type: {self.cell_type!r}")
 
 
@@ -88,7 +86,9 @@ class NotebookModel:
         """Write the current document as a valid ``.ipynb`` file."""
         nbformat.write(self.to_nbformat(), path)
 
-    def add_cell(self, cell: CellModel | None = None, index: int | None = None) -> CellModel:
+    def add_cell(
+        self, cell: CellModel | None = None, index: int | None = None
+    ) -> CellModel:
         """Insert a cell and return it. By default, append it to the notebook."""
         cell = cell or CellModel()
         if index is None:
