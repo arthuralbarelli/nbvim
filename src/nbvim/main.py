@@ -258,15 +258,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="nbvim")
     parser.add_argument(
         "notebook",
-        nargs="?",
         type=Path,
         help="notebook to open or create",
     )
     args = parser.parse_args()
-
-    if args.notebook is None:
-        NbVim().run()
-        return
 
     notebook = (
         NotebookModel.load(args.notebook)
