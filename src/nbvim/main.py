@@ -7,7 +7,49 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
 from textual.widgets import Input, Static, TextArea
 
+from .kernel import KernelExecutionError, ProjectKernel
 from .model import CellModel, NotebookModel
+
+
+def _text_value(value: object) -> str:
+    if isinstance(value, list):
+        return "".join(str(part) for part in value)
+    return str(value)
+
+
+def format_output(output: object) -> str:
+    """Convert a notebook output into readable terminal text."""
+    output_type = output.get("output_type") if isinstance(output, dict) else None
+    if output_type == "stream":
+        return _text_value(output.get("text", ""))
+    if output_type == "error":
+        return "\n".join(output.get("traceback", []))
+    if output_type in {"display_data", "execute_result"}:
+        data = output.get("data", {})
+        if "text/plain" in data:
+            return _text_value(data["text/plain"])
+        for media_type in ("text/html", "image/svg+xml", "image/png"):
+            if media_type in data:
+                return f"[{media_type} output]"
+        return "[display data]"
+    return ""
+
+
+class OutputView(Static):
+    """Render the outputs currently stored on a cell."""
+
+    def __init__(self, outputs: list[object] | None = None, **kwargs) -> None:
+        self.outputs = outputs or []
+        super().__init__(self.render_outputs(), markup=False, **kwargs)
+
+    def render_outputs(self) -> str:
+        return "\n".join(
+            rendered for output in self.outputs if (rendered := format_output(output))
+        )
+
+    def update_outputs(self, outputs: list[object]) -> None:
+        self.outputs = outputs
+        self.update(self.render_outputs())
 
 
 class Cell(Horizontal):
@@ -33,6 +75,7 @@ class Cell(Horizontal):
                 text=self.model.source,
                 language=self.language,
             )
+            yield OutputView(self.model.outputs, classes="cell-output")
             yield Static(self.language, classes="cell-footer")
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -40,6 +83,21 @@ class Cell(Horizontal):
         self.model.source = event.text_area.text
         visual_line_count = event.text_area.wrapped_document.height
         event.text_area.styles.height = max(4, visual_line_count + 2)
+
+    def set_running(self) -> None:
+        self.query_one(".marker", Static).update("[*]")
+
+    def set_result(
+        self, result_outputs: list[object], execution_count: int | None
+    ) -> None:
+        self.model.outputs = result_outputs
+        self.model.execution_count = execution_count
+        self.query_one(OutputView).update_outputs(result_outputs)
+        count = execution_count if execution_count is not None else "-"
+        self.query_one(".marker", Static).update(f"[{count}]")
+
+    def set_error(self) -> None:
+        self.query_one(".marker", Static).update("[!]")
 
 
 class CellContainer(VerticalScroll):
@@ -65,6 +123,12 @@ class CellContainer(VerticalScroll):
                 return node
             node = node.parent
         return None
+
+    def get_focused_code_cell(self) -> Cell | None:
+        cell = self.get_focused_cell()
+        if cell is None or cell.model.cell_type != "code":
+            return None
+        return cell
 
     async def add_cell_after_focused(self) -> None:
         focused_cell = self.get_focused_cell()
@@ -157,6 +221,8 @@ class NbVim(App):
         self.notebook = notebook or NotebookModel.new()
         self.path = path
         self.save_on_exit = True
+        self.kernel = ProjectKernel(path or Path.cwd())
+        self._cell_running = False
 
     BINDINGS = [
         Binding("b", "add_cell", "Add cell", priority=True),
@@ -164,6 +230,7 @@ class NbVim(App):
         Binding("j", "move_down", "Move to next cell", priority=True),
         Binding("k", "move_up", "Move to previous cell", priority=True),
         Binding("a", "add_cell_above", "Add cell above", priority=True),
+        Binding("r", "run_cell", "Run cell", priority=True),
         Binding("enter", "edit_cell", "Edit cell"),
         Binding("escape", "navigate_cell", "Navigate cells", priority=True),
     ]
@@ -236,6 +303,34 @@ class NbVim(App):
 
     def action_navigate_cell(self) -> None:
         self.query_one(CellContainer).navigate_focused_cell()
+
+    async def action_run_cell(self) -> None:
+        """Execute the focused code cell in the persistent project kernel."""
+        if self._cell_running:
+            self.notify("A cell is already running", severity="warning")
+            return
+
+        cell = self.query_one(CellContainer).get_focused_cell()
+        if cell is None:
+            self.notify("No cell is focused", severity="warning")
+            return
+        if cell.model.cell_type != "code":
+            self.notify("Only code cells can be executed", severity="warning")
+            return
+
+        self._cell_running = True
+        cell.set_running()
+        try:
+            result = await self.kernel.execute(cell.model.source)
+            cell.set_result(result.outputs, result.execution_count)
+        except KernelExecutionError as exc:
+            cell.set_error()
+            self.notify(str(exc), severity="error", timeout=8)
+        finally:
+            self._cell_running = False
+
+    async def on_unmount(self) -> None:
+        await self.kernel.shutdown()
 
     def action_delete_cell(self) -> None:
         """Delete the focused cell after two consecutive presses of ``d``."""
