@@ -11,6 +11,8 @@ from nbvim.kernel import (
     project_root_for,
     resolve_project_python,
 )
+from textual.widgets import Markdown, Static, TextArea
+
 from nbvim.main import NbVim, format_output
 from nbvim.model import CellModel, NotebookModel
 
@@ -103,6 +105,75 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
             await app.run_action("run_cell")
             self.assertEqual(cell.model.execution_count, 1)
             self.assertEqual(cell.model.outputs[0]["text"], "print('ok')")
+
+
+class CellTypeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_markdown_cells_render_and_convert_to_python(self) -> None:
+        app = NbVim(
+            NotebookModel(cells=[CellModel(cell_type="markdown", source="# Title")])
+        )
+        async with app.run_test() as pilot:
+            cell = app.query_one("Cell")
+            cell.focus()
+            await pilot.pause()
+
+            markdown = cell.query_one(".cell-markdown", Markdown)
+            editor = cell.query_one(TextArea)
+            self.assertTrue(markdown.display)
+            self.assertEqual(markdown.source, "# Title")
+            self.assertFalse(editor.display)
+            self.assertEqual(
+                str(cell.query_one(".cell-footer", Static).render()), "markdown"
+            )
+
+            await pilot.press("m")
+            await pilot.pause()
+
+            self.assertEqual(cell.model.cell_type, "code")
+            self.assertEqual(cell.model.source, "# Title")
+            self.assertEqual(cell.language, "python")
+            self.assertFalse(markdown.display)
+            self.assertTrue(editor.display)
+            self.assertEqual(editor.language, "python")
+
+    async def test_python_cells_convert_to_rendered_markdown(self) -> None:
+        app = NbVim(NotebookModel(cells=[CellModel(source="## Heading")]))
+        async with app.run_test() as pilot:
+            cell = app.query_one("Cell")
+            cell.focus()
+            await pilot.pause()
+
+            await app.run_action("toggle_cell_type")
+            await pilot.pause()
+
+            markdown = cell.query_one(".cell-markdown", Markdown)
+            self.assertEqual(cell.model.cell_type, "markdown")
+            self.assertEqual(cell.language, "markdown")
+            self.assertTrue(markdown.display)
+            self.assertEqual(markdown.source, "## Heading")
+            self.assertFalse(cell.query_one(TextArea).display)
+            self.assertFalse(cell.query_one("OutputView").display)
+
+    async def test_markdown_preview_returns_after_edit(self) -> None:
+        app = NbVim(
+            NotebookModel(cells=[CellModel(cell_type="markdown", source="# Title")])
+        )
+        async with app.run_test() as pilot:
+            cell = app.query_one("Cell")
+            cell.focus()
+            await pilot.pause()
+
+            await app.run_action("edit_cell")
+            await pilot.pause()
+            self.assertTrue(cell.query_one(TextArea).display)
+            self.assertFalse(cell.query_one(".cell-markdown", Markdown).display)
+
+            await app.run_action("navigate_cell")
+            await pilot.pause()
+            self.assertFalse(cell.query_one(TextArea).display)
+            markdown = cell.query_one(".cell-markdown", Markdown)
+            self.assertTrue(markdown.display)
+            self.assertEqual(markdown.source, "# Title")
 
 
 if __name__ == "__main__":
