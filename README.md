@@ -73,6 +73,9 @@ Try the included demo with:
 uv run nbvim demo.ipynb
 ```
 
+PNG notebook outputs are rendered as terminal pixels when the project is synced with
+`uv`, so matplotlib image cells can be viewed directly in nbvim.
+
 ## Develop
 
 ```bash
