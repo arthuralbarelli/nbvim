@@ -1,6 +1,13 @@
 import argparse
+import base64
+import binascii
+from io import BytesIO
 from pathlib import Path
 
+from PIL import Image, UnidentifiedImageError
+from rich.console import ConsoleOptions, Group, RenderResult
+from rich.style import Style
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.events import Key
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -17,6 +24,57 @@ def _text_value(value: object) -> str:
     return str(value)
 
 
+class TerminalImage:
+    """Render an image as colored Unicode half-blocks."""
+
+    def __init__(self, image: Image.Image) -> None:
+        self.image = image.convert("RGB")
+
+    def __rich_console__(
+        self, console: object, options: ConsoleOptions
+    ) -> RenderResult:
+        """Yield terminal rows, adapting the image to the available width."""
+        if self.image.width == 0 or self.image.height == 0:
+            return
+
+        width = max(1, min(self.image.width, options.max_width))
+        height = max(1, round(self.image.height * width / self.image.width))
+        image = self.image.resize((width, height), Image.Resampling.LANCZOS)
+        pixels = image.load()
+        style_cache: dict[tuple[tuple[int, int, int], tuple[int, int, int]], Style] = {}
+
+        for y in range(0, height, 2):
+            row = Text()
+            for x in range(width):
+                top = pixels[x, y]
+                bottom = pixels[x, y + 1] if y + 1 < height else (0, 0, 0)
+                colors = (top, bottom)
+                style = style_cache.get(colors)
+                if style is None:
+                    style = Style(
+                        color=f"rgb({top[0]},{top[1]},{top[2]})",
+                        bgcolor=f"rgb({bottom[0]},{bottom[1]},{bottom[2]})",
+                    )
+                    style_cache[colors] = style
+                row.append("▀", style=style)
+            yield row
+
+
+def _image_from_data(value: object) -> Image.Image | None:
+    """Decode a Jupyter base64 image payload."""
+    try:
+        encoded = _text_value(value).encode("ascii")
+        image = Image.open(BytesIO(base64.b64decode(encoded)))
+        image.load()
+    except (ValueError, UnicodeError, binascii.Error, UnidentifiedImageError, OSError):
+        return None
+
+    if image.mode == "RGBA":
+        background = Image.new("RGBA", image.size, (0, 0, 0, 255))
+        image = Image.alpha_composite(background, image)
+    return image.convert("RGB")
+
+
 def format_output(output: object) -> str:
     """Convert a notebook output into readable terminal text."""
     output_type = output.get("output_type") if isinstance(output, dict) else None
@@ -28,11 +86,34 @@ def format_output(output: object) -> str:
         data = output.get("data", {})
         if "text/plain" in data:
             return _text_value(data["text/plain"])
-        for media_type in ("text/html", "image/svg+xml", "image/png"):
+        for media_type in (
+            "text/html",
+            "image/svg+xml",
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp",
+        ):
             if media_type in data:
                 return f"[{media_type} output]"
         return "[display data]"
     return ""
+
+
+def render_output(output: object) -> str | TerminalImage:
+    """Convert a notebook output into a Rich-compatible terminal renderable."""
+    if isinstance(output, dict) and output.get("output_type") in {
+        "display_data",
+        "execute_result",
+    }:
+        data = output.get("data", {})
+        if isinstance(data, dict):
+            for media_type in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+                if media_type in data:
+                    image = _image_from_data(data[media_type])
+                    if image is not None:
+                        return TerminalImage(image)
+    return format_output(output)
 
 
 class OutputView(Static):
@@ -42,10 +123,13 @@ class OutputView(Static):
         self.outputs = outputs or []
         super().__init__(self.render_outputs(), markup=False, **kwargs)
 
-    def render_outputs(self) -> str:
-        return "\n".join(
-            rendered for output in self.outputs if (rendered := format_output(output))
-        )
+    def render_outputs(self) -> Group:
+        rendered = []
+        for output in self.outputs:
+            item = render_output(output)
+            if item != "":
+                rendered.append(Text(item) if isinstance(item, str) else item)
+        return Group(*rendered)
 
     def update_outputs(self, outputs: list[object]) -> None:
         self.outputs = outputs

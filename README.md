@@ -4,6 +4,8 @@ Vim-inspired terminal UI for editing and running Jupyter `.ipynb` notebooks.
 
 Open or create a notebook, move between cells with vim-like keys, and run Python in your active environment.
 
+![nbvim rendering a notebook image output](assets/nbvim-image-demo.gif)
+
 ## Requirements
 
 - Python 3.13+
@@ -57,6 +59,16 @@ source .venv/bin/activate
 nbvim path/to/notebook.ipynb
 
 nbvim --python /path/to/python path/to/notebook.ipynb
+```
+
+PNG, JPEG, GIF, and WebP display outputs are rendered in the terminal using
+colored Unicode blocks. Images are scaled to the available output width, so
+plots such as `matplotlib` figures can be viewed without leaving nbvim.
+
+Try the included demo with:
+
+```bash
+uv run nbvim demo.ipynb
 ```
 
 ## Develop
