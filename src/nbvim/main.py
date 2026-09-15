@@ -18,6 +18,9 @@ from .kernel import KernelExecutionError, ProjectKernel
 from .model import CellModel, NotebookModel
 
 
+MAX_TERMINAL_IMAGE_WIDTH = 60
+
+
 def _text_value(value: object) -> str:
     if isinstance(value, list):
         return "".join(str(part) for part in value)
@@ -37,7 +40,7 @@ class TerminalImage:
         if self.image.width == 0 or self.image.height == 0:
             return
 
-        width = max(1, min(self.image.width, options.max_width))
+        width = max(1, min(self.image.width, options.max_width, MAX_TERMINAL_IMAGE_WIDTH))
         height = max(1, round(self.image.height * width / self.image.width))
         image = self.image.resize((width, height), Image.Resampling.LANCZOS)
         pixels = image.load()
