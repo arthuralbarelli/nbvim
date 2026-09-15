@@ -10,6 +10,8 @@ Open or create a notebook, move between cells with vim-like keys, and run Python
 
 ![nbvim rendering a notebook image output](assets/nbvim-image-demo.gif)
 
+![nbvim demo](assets/demo.gif)
+
 ## Requirements
 
 - Python 3.13+
