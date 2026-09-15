@@ -367,14 +367,13 @@ class NbVim(App):
         self,
         notebook: NotebookModel | None = None,
         path: Path | None = None,
-        python: str | Path | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.notebook = notebook or NotebookModel.new()
         self.path = path
         self.save_on_exit = True
-        self.kernel = ProjectKernel(path or Path.cwd(), python=python)
+        self.kernel = ProjectKernel(path or Path.cwd())
         self._cell_running = False
 
     BINDINGS = [
@@ -513,12 +512,6 @@ def main() -> None:
         type=Path,
         help="notebook to open or create",
     )
-    parser.add_argument(
-        "--python",
-        type=Path,
-        default=None,
-        help="Python interpreter for the notebook kernel",
-    )
     args = parser.parse_args()
 
     notebook = (
@@ -530,7 +523,7 @@ def main() -> None:
     # if the user exits without making any changes.
     notebook.save(args.notebook)
     try:
-        app = NbVim(notebook, path=args.notebook, python=args.python)
+        app = NbVim(notebook, path=args.notebook)
         app.run()
     finally:
         if app.save_on_exit:

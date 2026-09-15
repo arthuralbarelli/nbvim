@@ -8,6 +8,8 @@ Open or create a notebook, move between cells with vim-like keys, and run Python
 
 ![nbvim demo](assets/demo.gif)
 
+![nbvim rendering a notebook image output](assets/nbvim-image-demo.gif)
+
 ## Requirements
 
 - Python 3.13+
@@ -53,6 +55,17 @@ Leaving the UI any other way saves the notebook automatically.
 `r` executes the focused code cell in a persistent Jupyter Python kernel.
 
 The kernel uses the interpreter from `--python`, or else the active environment (`VIRTUAL_ENV`, then `CONDA_PREFIX`). It never uses the interpreter running nbvim, and it does not guess a project `.venv`. If nothing is active, the editor still opens and running a cell reports an error.
+
+PNG, JPEG, GIF, and WebP display outputs are rendered in the terminal using
+colored Unicode blocks. Images are scaled to the available output width, so
+plots such as `matplotlib` figures can be viewed without leaving nbvim.
+
+Try the included demo with:
+
+```bash
+uv run nbvim demo.ipynb
+```
+
 
 The target environment needs `ipykernel` installed.
 

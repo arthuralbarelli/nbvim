@@ -145,6 +145,24 @@ class KernelExecutionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
+    def test_image_output_is_rendered_as_terminal_pixels(self) -> None:
+        image = Image.new("RGB", (2, 2), (255, 0, 0))
+        image_bytes = BytesIO()
+        image.save(image_bytes, format="PNG")
+        output = new_output(
+            "display_data",
+            data={
+                "image/png": base64.b64encode(image_bytes.getvalue()).decode()
+            },
+        )
+
+        rendered = render_output(output)
+
+        self.assertIsInstance(rendered, TerminalImage)
+        console = Console(width=2, color_system="truecolor", record=True)
+        console.print(rendered)
+        self.assertIn("▀", console.export_text())
+
     def test_output_formatting(self) -> None:
         self.assertEqual(
             format_output(new_output("stream", name="stdout", text="hello\n")),
