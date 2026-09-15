@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +65,29 @@ def resolve_kernel_python(python: str | Path | None = None) -> Path | None:
     return None
 
 
+def _host_site_packages() -> list[str]:
+    """Site-packages of the interpreter running nbvim, used to bootstrap ipykernel."""
+    import site
+
+    paths: list[str] = []
+    for path in site.getsitepackages():
+        if path.startswith(sys.prefix) and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def _kernel_argv(python: Path, *, inject_host_site: bool) -> list[str]:
+    """Build the ipykernel launch command for the project interpreter."""
+    if not inject_host_site:
+        return [str(python), "-m", "ipykernel_launcher", "-f", "{connection_file}"]
+    script = (
+        "import sys, runpy; "
+        f"sys.path.extend({_host_site_packages()!r}); "
+        "runpy.run_module('ipykernel_launcher', run_name='__main__')"
+    )
+    return [str(python), "-c", script, "-f", "{connection_file}"]
+
+
 @dataclass
 class ExecutionResult:
     """Outputs and execution count returned by one kernel execution."""
@@ -99,14 +124,15 @@ class ProjectKernel:
                 "env, or pass --python."
             )
 
+        probe = subprocess.run(
+            [str(self.python), "-c", "import ipykernel_launcher"],
+            capture_output=True,
+            text=True,
+        )
         manager = AsyncKernelManager(kernel_name="python3")
-        manager.kernel_spec.argv = [
-            str(self.python),
-            "-m",
-            "ipykernel_launcher",
-            "-f",
-            "{connection_file}",
-        ]
+        manager.kernel_spec.argv = _kernel_argv(
+            self.python, inject_host_site=probe.returncode != 0
+        )
         try:
             await manager.start_kernel(cwd=str(self.project_root))
             client = manager.client()
