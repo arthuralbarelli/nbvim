@@ -8,10 +8,6 @@ Open or create a notebook, move between cells with vim-like keys, and run Python
 
 ![nbvim demo](assets/demo.gif)
 
-![nbvim rendering a notebook image output](assets/nbvim-image-demo.gif)
-
-![nbvim demo](assets/demo.gif)
-
 ## Requirements
 
 - Python 3.13+
@@ -68,7 +64,6 @@ Try the included demo with:
 uv run nbvim demo.ipynb
 ```
 
-
 The target environment needs `ipykernel` installed.
 
 ```bash
@@ -77,19 +72,6 @@ nbvim path/to/notebook.ipynb
 
 nbvim --python /path/to/python path/to/notebook.ipynb
 ```
-
-PNG, JPEG, GIF, and WebP display outputs are rendered in the terminal using
-colored Unicode blocks. Images are scaled to the available output width, so
-plots such as `matplotlib` figures can be viewed without leaving nbvim.
-
-Try the included demo with:
-
-```bash
-uv run nbvim demo.ipynb
-```
-
-PNG notebook outputs are rendered as terminal pixels when the project is synced with
-`uv`, so matplotlib image cells can be viewed directly in nbvim.
 
 ## Develop
 
