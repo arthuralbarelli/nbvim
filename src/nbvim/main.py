@@ -5,7 +5,7 @@ from textual.app import App, ComposeResult
 from textual.events import Key
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
-from textual.widgets import Input, Static, TextArea
+from textual.widgets import Input, Markdown, Static, TextArea
 
 from .kernel import KernelExecutionError, ProjectKernel
 from .model import CellModel, NotebookModel
@@ -66,23 +66,82 @@ class Cell(Horizontal):
         kwargs.setdefault("classes", "cell")
         super().__init__(**kwargs)
         self.model = model or CellModel()
-        self.language = language
+        self.language = "markdown" if self.model.cell_type == "markdown" else language
+        self._editing = False
 
     def compose(self) -> ComposeResult:
+        is_markdown = self.model.cell_type == "markdown"
+        markdown = Markdown(self.model.source, classes="cell-markdown")
+        markdown.display = is_markdown
+        editor = TextArea.code_editor(
+            text=self.model.source,
+            language=self.language,
+        )
+        editor.display = not is_markdown
+        output = OutputView(self.model.outputs, classes="cell-output")
+        output.display = not is_markdown
         yield Static("[ ]", classes="marker")
         with Vertical(classes="cell-editor"):
-            yield TextArea.code_editor(
-                text=self.model.source,
-                language=self.language,
-            )
-            yield OutputView(self.model.outputs, classes="cell-output")
+            yield markdown
+            yield editor
+            yield output
             yield Static(self.language, classes="cell-footer")
+
+    def on_mount(self) -> None:
+        if self.model.cell_type == "code" and self.model.execution_count is not None:
+            self.query_one(".marker", Static).update(f"[{self.model.execution_count}]")
+        self._sync_editor_height()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Keep the notebook model and cell height in sync with the editor."""
         self.model.source = event.text_area.text
         visual_line_count = event.text_area.wrapped_document.height
         event.text_area.styles.height = max(4, visual_line_count + 2)
+
+    def enter_edit(self) -> None:
+        self._editing = True
+        self.apply_presentation()
+        self.query_one(TextArea).focus()
+
+    def exit_edit(self) -> None:
+        self._editing = False
+        self.apply_presentation()
+
+    def toggle_type(self) -> None:
+        """Switch the cell between markdown and Python code."""
+        if self.model.cell_type == "markdown":
+            self.model.cell_type = "code"
+            self.language = "python"
+        else:
+            self.model.cell_type = "markdown"
+            self.language = "markdown"
+            self.model.outputs = []
+            self.model.execution_count = None
+            self.query_one(OutputView).update_outputs([])
+            self.query_one(".marker", Static).update("[ ]")
+        self._editing = False
+        self.apply_presentation()
+
+    def apply_presentation(self) -> None:
+        """Show a markdown preview, or the code editor, based on cell type."""
+        is_markdown = self.model.cell_type == "markdown"
+        show_editor = not is_markdown or self._editing
+        markdown = self.query_one(".cell-markdown", Markdown)
+        editor = self.query_one(TextArea)
+        markdown.display = is_markdown and not self._editing
+        if markdown.display:
+            markdown.update(self.model.source)
+        editor.display = show_editor
+        editor.language = self.language
+        self.query_one(OutputView).display = not is_markdown
+        self.query_one(".cell-footer", Static).update(self.language)
+        if show_editor:
+            self._sync_editor_height()
+
+    def _sync_editor_height(self) -> None:
+        editor = self.query_one(TextArea)
+        visual_line_count = editor.wrapped_document.height
+        editor.styles.height = max(4, visual_line_count + 2)
 
     def set_running(self) -> None:
         self.query_one(".marker", Static).update("[*]")
@@ -144,6 +203,7 @@ class CellContainer(VerticalScroll):
         if focused_cell is None:
             await self.mount(cell)
         else:
+            focused_cell.exit_edit()
             await self.mount(cell, after=focused_cell)
 
         cell.focus()
@@ -162,6 +222,7 @@ class CellContainer(VerticalScroll):
         if focused_cell is None:
             await self.mount(cell)
         else:
+            focused_cell.exit_edit()
             await self.mount(cell, before=focused_cell)
 
         cell.focus()
@@ -169,12 +230,18 @@ class CellContainer(VerticalScroll):
     def edit_focused_cell(self) -> None:
         cell = self.get_focused_cell()
         if cell is not None:
-            cell.query_one(TextArea).focus()
+            cell.enter_edit()
 
     def navigate_focused_cell(self) -> None:
         cell = self.get_focused_cell()
         if cell is not None:
+            cell.exit_edit()
             cell.focus()
+
+    def toggle_focused_cell_type(self) -> None:
+        cell = self.get_focused_cell()
+        if cell is not None:
+            cell.toggle_type()
 
     def focus_relative_cell(self, offset: int) -> None:
         cells = list(self.query(".cell"))
@@ -185,6 +252,7 @@ class CellContainer(VerticalScroll):
         if focused_cell is None:
             target_index = 0 if offset > 0 else len(cells) - 1
         else:
+            focused_cell.exit_edit()
             target_index = cells.index(focused_cell) + offset
             target_index = max(0, min(target_index, len(cells) - 1))
 
@@ -231,6 +299,7 @@ class NbVim(App):
         Binding("k", "move_up", "Move to previous cell", priority=True),
         Binding("a", "add_cell_above", "Add cell above", priority=True),
         Binding("r", "run_cell", "Run cell", priority=True),
+        Binding("m", "toggle_cell_type", "Switch markdown/python"),
         Binding("enter", "edit_cell", "Edit cell"),
         Binding("escape", "navigate_cell", "Navigate cells", priority=True),
     ]
@@ -303,6 +372,9 @@ class NbVim(App):
 
     def action_navigate_cell(self) -> None:
         self.query_one(CellContainer).navigate_focused_cell()
+
+    def action_toggle_cell_type(self) -> None:
+        self.query_one(CellContainer).toggle_focused_cell_type()
 
     async def action_run_cell(self) -> None:
         """Execute the focused code cell in the persistent project kernel."""

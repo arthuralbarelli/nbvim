@@ -13,6 +13,13 @@
     height: auto;
 }
 
+.cell-markdown {
+    width: 100%;
+    height: auto;
+    min-height: 4;
+    padding: 0 1;
+}
+
 .cell-output {
     width: 100%;
     height: auto;
