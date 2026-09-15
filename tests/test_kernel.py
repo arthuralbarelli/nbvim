@@ -16,6 +16,8 @@ from nbvim.kernel import (
     ExecutionResult,
     KernelExecutionError,
     ProjectKernel,
+    _host_site_packages,
+    _kernel_argv,
     project_root_for,
     resolve_kernel_python,
 )
@@ -79,6 +81,25 @@ class ProjectInterpreterTests(unittest.TestCase):
             os.environ.pop("CONDA_PREFIX", None)
             self.assertIsNone(resolve_kernel_python())
             self.assertIsNone(ProjectKernel(Path("notebook.ipynb")).python)
+
+
+class KernelArgvTests(unittest.TestCase):
+    def test_uses_module_when_project_has_ipykernel(self) -> None:
+        python = Path("/tmp/project/bin/python")
+        self.assertEqual(
+            _kernel_argv(python, inject_host_site=False),
+            [str(python), "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+        )
+
+    def test_injects_host_site_packages_when_missing(self) -> None:
+        python = Path("/tmp/project/bin/python")
+        argv = _kernel_argv(python, inject_host_site=True)
+        self.assertEqual(argv[0], str(python))
+        self.assertEqual(argv[1], "-c")
+        for path in _host_site_packages():
+            self.assertIn(path, argv[2])
+        self.assertIn("ipykernel_launcher", argv[2])
+        self.assertEqual(argv[-2:], ["-f", "{connection_file}"])
 
 
 class KernelExecutionTests(unittest.IsolatedAsyncioTestCase):
