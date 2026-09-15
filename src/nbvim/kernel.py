@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from jupyter_client import AsyncKernelManager
 from nbformat import NotebookNode
 from nbformat.v4 import new_output
+
+_PYTHON_CANDIDATES = (
+    ("Scripts", "python.exe"),
+    ("bin", "python"),
+    ("bin", "python3"),
+)
 
 
 class KernelExecutionError(RuntimeError):
@@ -28,27 +33,34 @@ def project_root_for(notebook_path: str | Path) -> Path:
     return start
 
 
-def resolve_project_python(
-    notebook_path: str | Path,
-    fallback: str | Path | None = None,
-) -> Path:
-    """Resolve the Python executable belonging to the notebook's project.
-
-    UV and most Python project tools use ``.venv`` at the project root. If no
-    project environment is present, the interpreter running nbvim is used.
-    """
-    root = project_root_for(notebook_path)
-    virtualenv = root / ".venv"
-    candidates = (
-        ("Scripts", "python.exe"),
-        ("bin", "python"),
-        ("bin", "python3"),
-    )
-    for directory, executable in candidates:
-        path = virtualenv / directory / executable
+def _python_in_environment(root: str | Path) -> Path | None:
+    """Return the interpreter inside an environment prefix, if it exists."""
+    for directory, executable in _PYTHON_CANDIDATES:
+        path = Path(root) / directory / executable
         if path.is_file() and os.access(path, os.X_OK):
             return path
-    return Path(fallback or sys.executable)
+    return None
+
+
+def resolve_kernel_python(python: str | Path | None = None) -> Path | None:
+    """Resolve the interpreter that should run notebook cells.
+
+    An explicit path wins. Otherwise the active virtualenv (``VIRTUAL_ENV``)
+    or conda prefix (``CONDA_PREFIX``) is used. Returns ``None`` when no user
+    environment is available so the editor can open without using nbvim's own
+    interpreter.
+    """
+    if python is not None:
+        return Path(python)
+
+    for key in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+        root = os.environ.get(key)
+        if not root:
+            continue
+        found = _python_in_environment(root)
+        if found is not None:
+            return found
+    return None
 
 
 @dataclass
@@ -71,9 +83,7 @@ class ProjectKernel:
     ) -> None:
         self.notebook_path = Path(notebook_path)
         self.project_root = project_root_for(self.notebook_path)
-        self.python = (
-            Path(python) if python else resolve_project_python(self.notebook_path)
-        )
+        self.python = resolve_kernel_python(python)
         self.startup_timeout = startup_timeout
         self.manager: AsyncKernelManager | None = None
         self.client = None
@@ -83,6 +93,11 @@ class ProjectKernel:
         """Start the kernel if it is not already running."""
         if self.manager is not None and self.client is not None:
             return
+        if self.python is None:
+            raise KernelExecutionError(
+                "No active Python environment. Activate a virtualenv or conda "
+                "env, or pass --python."
+            )
 
         manager = AsyncKernelManager(kernel_name="python3")
         manager.kernel_spec.argv = [
