@@ -1,7 +1,7 @@
 [project]
 name = "nbvim"
 version = "0.1.0"
-description = "Add your description here"
+description = "Vim-inspired terminal UI for editing and running Jupyter notebooks."
 readme = "README.md"
 authors = [
     { name = "Arthur Albarelli", email = "arthuralbarelli@gmail.com" }
