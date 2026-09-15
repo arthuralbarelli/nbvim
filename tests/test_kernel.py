@@ -1,9 +1,13 @@
+import base64
+import io
 import stat
 import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
 from nbformat.v4 import new_output
+from rich.console import Console
 
 from nbvim.kernel import (
     ExecutionResult,
@@ -13,7 +17,7 @@ from nbvim.kernel import (
 )
 from textual.widgets import Markdown, Static, TextArea
 
-from nbvim.main import NbVim, format_output
+from nbvim.main import NbVim, TerminalImage, format_output, render_output
 from nbvim.model import CellModel, NotebookModel
 
 
@@ -84,6 +88,22 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
             ),
             "ValueError: bad",
         )
+
+    def test_image_output_is_rendered_as_terminal_pixels(self) -> None:
+        image = Image.new("RGB", (2, 2), (255, 0, 0))
+        image_bytes = io.BytesIO()
+        image.save(image_bytes, format="PNG")
+        output = new_output(
+            "display_data",
+            data={"image/png": base64.b64encode(image_bytes.getvalue()).decode()},
+        )
+
+        rendered = render_output(output)
+
+        self.assertIsInstance(rendered, TerminalImage)
+        console = Console(width=2, color_system="truecolor", record=True)
+        console.print(rendered)
+        self.assertIn("▀", console.export_text())
 
     async def test_run_action_updates_focused_cell(self) -> None:
         class FakeKernel:
