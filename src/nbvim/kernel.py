@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from jupyter_client import AsyncKernelManager
 from nbformat import NotebookNode
 from nbformat.v4 import new_output
+
+_INLINE_MPLBACKEND = "module://matplotlib_inline.backend_inline"
+_BINARY_MIME_TYPES = {"application/pdf"}
 
 _PYTHON_CANDIDATES = (
     ("Scripts", "python.exe"),
@@ -78,14 +83,49 @@ def _host_site_packages() -> list[str]:
 
 def _kernel_argv(python: Path, *, inject_host_site: bool) -> list[str]:
     """Build the ipykernel launch command for the project interpreter."""
+    matplotlib_inline = ("--matplotlib=inline", "-f", "{connection_file}")
     if not inject_host_site:
-        return [str(python), "-m", "ipykernel_launcher", "-f", "{connection_file}"]
+        return [str(python), "-m", "ipykernel_launcher", *matplotlib_inline]
     script = (
         "import sys, runpy; "
         f"sys.path.extend({_host_site_packages()!r}); "
         "runpy.run_module('ipykernel_launcher', run_name='__main__')"
     )
-    return [str(python), "-c", script, "-f", "{connection_file}"]
+    return [str(python), "-c", script, *matplotlib_inline]
+
+
+def _kernel_env() -> dict[str, str]:
+    """Environment for the kernel process, forcing matplotlib's inline backend."""
+    env = os.environ.copy()
+    env["MPLBACKEND"] = _INLINE_MPLBACKEND
+    return env
+
+
+def _is_binary_mime_type(mime_type: object) -> bool:
+    if not isinstance(mime_type, str):
+        return False
+    return mime_type.startswith("image/") or mime_type in _BINARY_MIME_TYPES
+
+
+def _encode_binary_mime_value(mime_type: object, value: object) -> object:
+    """Base64-encode a binary mime payload so nbformat validation accepts it."""
+    if not _is_binary_mime_type(mime_type):
+        return value
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if not isinstance(value, bytes):
+        return value
+    return base64.b64encode(value).decode("ascii")
+
+
+def _encode_binary_mime_data(data: object) -> dict[str, Any]:
+    """Copy a mime bundle, encoding any raw image/pdf bytes as base64."""
+    if not isinstance(data, dict):
+        return {}
+    return {
+        mime_type: _encode_binary_mime_value(mime_type, value)
+        for mime_type, value in data.items()
+    }
 
 
 @dataclass
@@ -134,7 +174,7 @@ class ProjectKernel:
             self.python, inject_host_site=probe.returncode != 0
         )
         try:
-            await manager.start_kernel(cwd=str(self.project_root))
+            await manager.start_kernel(cwd=str(self.project_root), env=_kernel_env())
             client = manager.client()
             client.start_channels()
             await client.wait_for_ready(timeout=self.startup_timeout)
@@ -191,7 +231,7 @@ class ProjectKernel:
                     elif message_type in {"display_data", "execute_result"}:
                         output = new_output(
                             message_type,
-                            data=content.get("data", {}),
+                            data=_encode_binary_mime_data(content.get("data", {})),
                             metadata=content.get("metadata", {}),
                         )
                         if message_type == "execute_result":

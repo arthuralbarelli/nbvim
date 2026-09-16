@@ -65,13 +65,45 @@ class TerminalImage:
             yield row
 
 
-def _image_from_data(value: object) -> Image.Image | None:
-    """Decode a Jupyter base64 image payload."""
+_IMAGE_MAGIC = (
+    b"\x89PNG",
+    b"\xff\xd8",
+    b"GIF87a",
+    b"GIF89a",
+    b"RIFF",
+)
+
+
+def _image_bytes_from_data(value: object) -> bytes | None:
+    """Normalize a Jupyter image payload to raw image bytes."""
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytes):
+        if value.startswith(_IMAGE_MAGIC):
+            return value
+        try:
+            return base64.b64decode(value)
+        except binascii.Error:
+            return value
+
+    encoded = _text_value(value).strip()
+    if encoded.startswith("data:") and "," in encoded:
+        encoded = encoded.split(",", 1)[1]
     try:
-        encoded = _text_value(value).encode("ascii")
-        image = Image.open(BytesIO(base64.b64decode(encoded)))
+        return base64.b64decode(encoded)
+    except (ValueError, binascii.Error):
+        return None
+
+
+def _image_from_data(value: object) -> Image.Image | None:
+    """Decode a Jupyter image payload from base64, bytes, or a data URI."""
+    raw = _image_bytes_from_data(value)
+    if raw is None:
+        return None
+    try:
+        image = Image.open(BytesIO(raw))
         image.load()
-    except (ValueError, UnicodeError, binascii.Error, UnidentifiedImageError, OSError):
+    except (ValueError, UnidentifiedImageError, OSError):
         return None
 
     if image.mode == "RGBA":

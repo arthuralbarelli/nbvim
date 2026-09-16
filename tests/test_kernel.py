@@ -16,14 +16,22 @@ from nbvim.kernel import (
     ExecutionResult,
     KernelExecutionError,
     ProjectKernel,
+    _encode_binary_mime_data,
     _host_site_packages,
     _kernel_argv,
+    _kernel_env,
     project_root_for,
     resolve_kernel_python,
 )
 from textual.widgets import Markdown, Static, TextArea
 
-from nbvim.main import NbVim, TerminalImage, format_output, render_output
+from nbvim.main import (
+    NbVim,
+    TerminalImage,
+    _image_from_data,
+    format_output,
+    render_output,
+)
 from nbvim.model import CellModel, NotebookModel
 
 
@@ -88,7 +96,14 @@ class KernelArgvTests(unittest.TestCase):
         python = Path("/tmp/project/bin/python")
         self.assertEqual(
             _kernel_argv(python, inject_host_site=False),
-            [str(python), "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+            [
+                str(python),
+                "-m",
+                "ipykernel_launcher",
+                "--matplotlib=inline",
+                "-f",
+                "{connection_file}",
+            ],
         )
 
     def test_injects_host_site_packages_when_missing(self) -> None:
@@ -99,7 +114,15 @@ class KernelArgvTests(unittest.TestCase):
         for path in _host_site_packages():
             self.assertIn(path, argv[2])
         self.assertIn("ipykernel_launcher", argv[2])
-        self.assertEqual(argv[-2:], ["-f", "{connection_file}"])
+        self.assertEqual(
+            argv[-3:],
+            ["--matplotlib=inline", "-f", "{connection_file}"],
+        )
+
+    def test_kernel_env_forces_inline_matplotlib_backend(self) -> None:
+        with patch.dict(os.environ, {"MPLBACKEND": "macosx"}):
+            env = _kernel_env()
+        self.assertEqual(env["MPLBACKEND"], "module://matplotlib_inline.backend_inline")
 
 
 class KernelExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -145,15 +168,16 @@ class KernelExecutionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
-    def test_image_output_is_rendered_as_terminal_pixels(self) -> None:
+    def _png_bytes(self) -> bytes:
         image = Image.new("RGB", (2, 2), (255, 0, 0))
-        image_bytes = BytesIO()
+        image_bytes = io.BytesIO()
         image.save(image_bytes, format="PNG")
+        return image_bytes.getvalue()
+
+    def test_image_output_is_rendered_as_terminal_pixels(self) -> None:
         output = new_output(
             "display_data",
-            data={
-                "image/png": base64.b64encode(image_bytes.getvalue()).decode()
-            },
+            data={"image/png": base64.b64encode(self._png_bytes()).decode()},
         )
 
         rendered = render_output(output)
@@ -162,6 +186,51 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
         console = Console(width=2, color_system="truecolor", record=True)
         console.print(rendered)
         self.assertIn("▀", console.export_text())
+
+    def test_matplotlib_text_plain_does_not_hide_png(self) -> None:
+        output = new_output(
+            "display_data",
+            data={
+                "text/plain": "<Figure size 720x360 with 1 Axes>",
+                "image/png": base64.b64encode(self._png_bytes()).decode(),
+            },
+        )
+
+        self.assertIsInstance(render_output(output), TerminalImage)
+
+    def test_raw_png_bytes_are_rendered(self) -> None:
+        png = self._png_bytes()
+        output = {
+            "output_type": "display_data",
+            "data": {
+                "text/plain": "<Figure size 720x360 with 1 Axes>",
+                "image/png": png,
+            },
+        }
+
+        self.assertIsInstance(_image_from_data(png), Image.Image)
+        self.assertIsInstance(_image_from_data(memoryview(png)), Image.Image)
+        self.assertIsInstance(
+            _image_from_data("data:image/png;base64," + base64.b64encode(png).decode()),
+            Image.Image,
+        )
+        self.assertIsInstance(render_output(output), TerminalImage)
+
+    def test_binary_mime_payloads_are_base64_encoded(self) -> None:
+        png = self._png_bytes()
+        encoded = _encode_binary_mime_data(
+            {
+                "text/plain": "<Figure size 720x360 with 1 Axes>",
+                "image/png": png,
+                "application/pdf": b"%PDF",
+            }
+        )
+
+        self.assertEqual(encoded["text/plain"], "<Figure size 720x360 with 1 Axes>")
+        self.assertEqual(encoded["image/png"], base64.b64encode(png).decode())
+        self.assertEqual(encoded["application/pdf"], base64.b64encode(b"%PDF").decode())
+        output = new_output("display_data", data=encoded)
+        self.assertIsInstance(render_output(output), TerminalImage)
 
     def test_output_formatting(self) -> None:
         self.assertEqual(
@@ -179,22 +248,6 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
             ),
             "ValueError: bad",
         )
-
-    def test_image_output_is_rendered_as_terminal_pixels(self) -> None:
-        image = Image.new("RGB", (2, 2), (255, 0, 0))
-        image_bytes = io.BytesIO()
-        image.save(image_bytes, format="PNG")
-        output = new_output(
-            "display_data",
-            data={"image/png": base64.b64encode(image_bytes.getvalue()).decode()},
-        )
-
-        rendered = render_output(output)
-
-        self.assertIsInstance(rendered, TerminalImage)
-        console = Console(width=2, color_system="truecolor", record=True)
-        console.print(rendered)
-        self.assertIn("▀", console.export_text())
 
     async def test_run_action_updates_focused_cell(self) -> None:
         class FakeKernel:
