@@ -156,7 +156,7 @@ class Cell(Horizontal):
         language: str = "python",
         **kwargs,
     ) -> None:
-        kwargs.setdefault("classes", "cell")
+        kwargs.setdefault("classes", "notebook-cell")
         super().__init__(**kwargs)
         self.model = model or CellModel()
         self.language = "markdown" if self.model.cell_type == "markdown" else language
@@ -359,7 +359,7 @@ class CellContainer(VerticalScroll):
             cell.toggle_type()
 
     def focus_relative_cell(self, offset: int) -> None:
-        cells = list(self.query(".cell"))
+        cells = list(self.query(".notebook-cell"))
         if not cells:
             return
 
@@ -375,7 +375,7 @@ class CellContainer(VerticalScroll):
 
     def delete_focused_cell(self) -> None:
         cell = self.get_focused_cell()
-        cells = list(self.query(".cell"))
+        cells = list(self.query(".notebook-cell"))
         if cell is None or cell not in cells or len(cells) == 1:
             return
 
@@ -418,7 +418,7 @@ class CellContainer(VerticalScroll):
         return True
 
     def focused_is_last(self) -> bool:
-        cells = list(self.query(".cell"))
+        cells = list(self.query(".notebook-cell"))
         focused = self.get_focused_cell()
         return bool(cells) and focused is cells[-1]
 

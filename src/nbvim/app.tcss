@@ -2,7 +2,7 @@
     height: 1fr;
 }
 
-.cell {
+.notebook-cell {
     height: auto;
     margin-bottom: 1;
     border: solid transparent;
@@ -46,7 +46,7 @@
     color: $text-muted;
 }
 
-.cell:focus-within {
+.notebook-cell:focus-within {
     border: solid white;
 }
 
