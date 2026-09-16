@@ -61,7 +61,7 @@ name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be", size = 530807, upload-time = "2026-08-03T21:21:18.939Z" }
 wheels = [
@@ -426,6 +426,7 @@ dependencies = [
     { name = "nbformat" },
     { name = "pillow" },
     { name = "textual", extra = ["syntax"] },
+    { name = "textual-image" },
 ]
 
 [package.dev-dependencies]
@@ -441,6 +442,7 @@ requires-dist = [
     { name = "nbformat", specifier = ">=5.11.1" },
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "textual", extras = ["syntax"], specifier = ">=8.2.8" },
+    { name = "textual-image", specifier = ">=0.8.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -890,6 +892,19 @@ syntax = [
     { name = "tree-sitter-toml" },
     { name = "tree-sitter-xml" },
     { name = "tree-sitter-yaml" },
+]
+
+[[package]]
+name = "textual-image"
+version = "0.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7d/3f/2cb7f2ca8bcc2d16b207e1c986a26df1dd67695d9f72b17e1a076d0728d0/textual_image-0.14.0.tar.gz", hash = "sha256:230e2c38738a3d96ca3bcf99c6680b898917003bb21bd5fa7e22cbb16e843235", size = 172914, upload-time = "2026-09-13T20:33:38.706Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c6/e6/1900f281cd37521c91da1497e457a2489422d34b6ab5c8f6c6e870dc895a/textual_image-0.14.0-py3-none-any.whl", hash = "sha256:7af0d29edf02c917416230528dfe77c0d6e93bc6bbcbf21236622082defb0415", size = 180520, upload-time = "2026-09-13T20:33:37.101Z" },
 ]
 
 [[package]]

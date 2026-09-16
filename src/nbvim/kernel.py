@@ -17,6 +17,7 @@ from nbformat.v4 import new_output
 
 _INLINE_MPLBACKEND = "module://matplotlib_inline.backend_inline"
 _BINARY_MIME_TYPES = {"application/pdf"}
+_RETINA_STARTUP = "%config InlineBackend.figure_format = 'retina'"
 
 _PYTHON_CANDIDATES = (
     ("Scripts", "python.exe"),
@@ -187,74 +188,84 @@ class ProjectKernel:
 
         self.manager = manager
         self.client = client
+        await self._run(_RETINA_STARTUP, store_history=False, silent=True)
 
     async def execute(self, source: str) -> ExecutionResult:
         """Execute source and collect all notebook-compatible kernel outputs."""
         async with self._execution_lock:
             await self.start()
-            assert self.client is not None
+            return await self._run(source, store_history=True, silent=False)
 
-            try:
-                message_id = self.client.execute(
-                    source,
-                    store_history=True,
-                    allow_stdin=False,
-                )
-                outputs: list[NotebookNode] = []
-                execution_count: int | None = None
+    async def _run(
+        self,
+        source: str,
+        *,
+        store_history: bool,
+        silent: bool,
+    ) -> ExecutionResult:
+        """Send source to the kernel and collect iopub outputs until idle."""
+        assert self.client is not None
 
-                while True:
-                    message = await self.client.get_iopub_msg(
-                        timeout=self.startup_timeout
+        try:
+            message_id = self.client.execute(
+                source,
+                silent=silent,
+                store_history=store_history,
+                allow_stdin=False,
+            )
+            outputs: list[NotebookNode] = []
+            execution_count: int | None = None
+
+            while True:
+                message = await self.client.get_iopub_msg(timeout=self.startup_timeout)
+                parent_id = message.get("parent_header", {}).get("msg_id")
+                if parent_id != message_id:
+                    continue
+
+                message_type = message["msg_type"]
+                content = message["content"]
+                if (
+                    message_type == "status"
+                    and content.get("execution_state") == "idle"
+                ):
+                    break
+                if message_type == "execute_input":
+                    execution_count = content.get("execution_count")
+                elif message_type == "stream":
+                    outputs.append(
+                        new_output(
+                            "stream",
+                            name=content.get("name", "stdout"),
+                            text=content.get("text", ""),
+                        )
                     )
-                    parent_id = message.get("parent_header", {}).get("msg_id")
-                    if parent_id != message_id:
-                        continue
+                elif message_type in {"display_data", "execute_result"}:
+                    output = new_output(
+                        message_type,
+                        data=_encode_binary_mime_data(content.get("data", {})),
+                        metadata=content.get("metadata", {}),
+                    )
+                    if message_type == "execute_result":
+                        output["execution_count"] = content.get(
+                            "execution_count", execution_count
+                        )
+                    outputs.append(output)
+                elif message_type == "error":
+                    outputs.append(
+                        new_output(
+                            "error",
+                            ename=content.get("ename", ""),
+                            evalue=content.get("evalue", ""),
+                            traceback=content.get("traceback", []),
+                        )
+                    )
+        except Exception as exc:
+            await self.shutdown()
+            raise KernelExecutionError(
+                "The project Python kernel stopped responding."
+            ) from exc
 
-                    message_type = message["msg_type"]
-                    content = message["content"]
-                    if (
-                        message_type == "status"
-                        and content.get("execution_state") == "idle"
-                    ):
-                        break
-                    if message_type == "execute_input":
-                        execution_count = content.get("execution_count")
-                    elif message_type == "stream":
-                        outputs.append(
-                            new_output(
-                                "stream",
-                                name=content.get("name", "stdout"),
-                                text=content.get("text", ""),
-                            )
-                        )
-                    elif message_type in {"display_data", "execute_result"}:
-                        output = new_output(
-                            message_type,
-                            data=_encode_binary_mime_data(content.get("data", {})),
-                            metadata=content.get("metadata", {}),
-                        )
-                        if message_type == "execute_result":
-                            output["execution_count"] = content.get(
-                                "execution_count", execution_count
-                            )
-                        outputs.append(output)
-                    elif message_type == "error":
-                        outputs.append(
-                            new_output(
-                                "error",
-                                ename=content.get("ename", ""),
-                                evalue=content.get("evalue", ""),
-                                traceback=content.get("traceback", []),
-                            )
-                        )
-            except Exception as exc:
-                await self.shutdown()
-                raise KernelExecutionError(
-                    "The project Python kernel stopped responding."
-                ) from exc
-
-            return ExecutionResult(outputs, execution_count)
+        return ExecutionResult(outputs, execution_count)
 
     async def shutdown(self) -> None:
         """Stop the kernel and release its channels."""

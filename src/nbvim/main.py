@@ -5,64 +5,26 @@ from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
-from rich.console import ConsoleOptions, Group, RenderResult
-from rich.style import Style
-from rich.text import Text
+
+# Query TGP/Sixel support before Textual starts I/O threads.
+import textual_image.renderable  # noqa: F401
 from textual.app import App, ComposeResult
 from textual.events import Key
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
+from textual.widget import Widget
 from textual.widgets import Input, Markdown, Static, TextArea
+from textual_image.widget import Image as OutputImage
 
 from .kernel import KernelExecutionError, ProjectKernel
 from .model import CellModel, NotebookModel
 from .vim_editor import VimTextArea
-
-MAX_TERMINAL_IMAGE_WIDTH = 60
 
 
 def _text_value(value: object) -> str:
     if isinstance(value, list):
         return "".join(str(part) for part in value)
     return str(value)
-
-
-class TerminalImage:
-    """Render an image as colored Unicode half-blocks."""
-
-    def __init__(self, image: Image.Image) -> None:
-        self.image = image.convert("RGB")
-
-    def __rich_console__(
-        self, console: object, options: ConsoleOptions
-    ) -> RenderResult:
-        """Yield terminal rows, adapting the image to the available width."""
-        if self.image.width == 0 or self.image.height == 0:
-            return
-
-        width = max(
-            1, min(self.image.width, options.max_width, MAX_TERMINAL_IMAGE_WIDTH)
-        )
-        height = max(1, round(self.image.height * width / self.image.width))
-        image = self.image.resize((width, height), Image.Resampling.LANCZOS)
-        pixels = image.load()
-        style_cache: dict[tuple[tuple[int, int, int], tuple[int, int, int]], Style] = {}
-
-        for y in range(0, height, 2):
-            row = Text()
-            for x in range(width):
-                top = pixels[x, y]
-                bottom = pixels[x, y + 1] if y + 1 < height else (0, 0, 0)
-                colors = (top, bottom)
-                style = style_cache.get(colors)
-                if style is None:
-                    style = Style(
-                        color=f"rgb({top[0]},{top[1]},{top[2]})",
-                        bgcolor=f"rgb({bottom[0]},{bottom[1]},{bottom[2]})",
-                    )
-                    style_cache[colors] = style
-                row.append("▀", style=style)
-            yield row
 
 
 _IMAGE_MAGIC = (
@@ -137,8 +99,8 @@ def format_output(output: object) -> str:
     return ""
 
 
-def render_output(output: object) -> str | TerminalImage:
-    """Convert a notebook output into a Rich-compatible terminal renderable."""
+def render_output(output: object) -> str | Image.Image:
+    """Convert a notebook output into text or a decoded image."""
     if isinstance(output, dict) and output.get("output_type") in {
         "display_data",
         "execute_result",
@@ -149,28 +111,38 @@ def render_output(output: object) -> str | TerminalImage:
                 if media_type in data:
                     image = _image_from_data(data[media_type])
                     if image is not None:
-                        return TerminalImage(image)
+                        return image
     return format_output(output)
 
 
-class OutputView(Static):
+class OutputView(Vertical):
     """Render the outputs currently stored on a cell."""
 
     def __init__(self, outputs: list[object] | None = None, **kwargs) -> None:
         self.outputs = outputs or []
-        super().__init__(self.render_outputs(), markup=False, **kwargs)
+        super().__init__(**kwargs)
 
-    def render_outputs(self) -> Group:
-        rendered = []
+    def compose(self) -> ComposeResult:
+        yield from self._output_widgets()
+
+    def _output_widgets(self) -> list[Widget]:
+        widgets: list[Widget] = []
         for output in self.outputs:
             item = render_output(output)
-            if item != "":
-                rendered.append(Text(item) if isinstance(item, str) else item)
-        return Group(*rendered)
+            if item == "":
+                continue
+            if isinstance(item, Image.Image):
+                widgets.append(OutputImage(item, classes="cell-output-image"))
+            else:
+                widgets.append(Static(item, markup=False, classes="cell-output-text"))
+        return widgets
 
     def update_outputs(self, outputs: list[object]) -> None:
         self.outputs = outputs
-        self.update(self.render_outputs())
+        self.remove_children()
+        widgets = self._output_widgets()
+        if widgets:
+            self.mount(*widgets)
 
 
 class Cell(Horizontal):

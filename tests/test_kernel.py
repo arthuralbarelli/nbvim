@@ -10,12 +10,13 @@ from unittest.mock import patch
 
 from PIL import Image
 from nbformat.v4 import new_output
-from rich.console import Console
+from textual_image.widget import Image as OutputImage
 
 from nbvim.kernel import (
     ExecutionResult,
     KernelExecutionError,
     ProjectKernel,
+    _RETINA_STARTUP,
     _encode_binary_mime_data,
     _host_site_packages,
     _kernel_argv,
@@ -27,7 +28,7 @@ from textual.widgets import Markdown, Static, TextArea
 
 from nbvim.main import (
     NbVim,
-    TerminalImage,
+    OutputView,
     _image_from_data,
     format_output,
     render_output,
@@ -144,6 +145,64 @@ class KernelExecutionTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await kernel.shutdown()
 
+    async def test_start_configures_retina_figures_without_history(self) -> None:
+        executed: list[tuple[str, bool, bool]] = []
+
+        class FakeClient:
+            def execute(
+                self,
+                source: str,
+                silent: bool = False,
+                store_history: bool = True,
+                allow_stdin: bool = False,
+            ) -> str:
+                executed.append((source, silent, store_history))
+                return "startup-id"
+
+            async def get_iopub_msg(self, timeout: float) -> dict[str, object]:
+                return {
+                    "parent_header": {"msg_id": "startup-id"},
+                    "msg_type": "status",
+                    "content": {"execution_state": "idle"},
+                }
+
+            def start_channels(self) -> None:
+                pass
+
+            async def wait_for_ready(self, timeout: float) -> None:
+                pass
+
+            def stop_channels(self) -> None:
+                pass
+
+        class FakeManager:
+            kernel_spec = type("Spec", (), {"argv": []})()
+
+            async def start_kernel(self, **kwargs: object) -> None:
+                pass
+
+            def client(self) -> FakeClient:
+                return FakeClient()
+
+            async def shutdown_kernel(self, now: bool = True) -> None:
+                pass
+
+        kernel = ProjectKernel(Path("example.ipynb"), python=sys.executable)
+        with (
+            patch("nbvim.kernel.AsyncKernelManager", return_value=FakeManager()),
+            patch(
+                "nbvim.kernel.subprocess.run",
+                return_value=type("Result", (), {"returncode": 0})(),
+            ),
+        ):
+            await kernel.start()
+
+        self.assertEqual(
+            executed,
+            [(_RETINA_STARTUP, True, False)],
+        )
+        self.assertIn("retina", _RETINA_STARTUP)
+
     async def test_error_output_is_not_lost(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             kernel = ProjectKernel(
@@ -174,7 +233,7 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
         image.save(image_bytes, format="PNG")
         return image_bytes.getvalue()
 
-    def test_image_output_is_rendered_as_terminal_pixels(self) -> None:
+    def test_image_output_is_decoded_as_pil_image(self) -> None:
         output = new_output(
             "display_data",
             data={"image/png": base64.b64encode(self._png_bytes()).decode()},
@@ -182,10 +241,8 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
 
         rendered = render_output(output)
 
-        self.assertIsInstance(rendered, TerminalImage)
-        console = Console(width=2, color_system="truecolor", record=True)
-        console.print(rendered)
-        self.assertIn("▀", console.export_text())
+        self.assertIsInstance(rendered, Image.Image)
+        self.assertEqual(rendered.size, (2, 2))
 
     def test_matplotlib_text_plain_does_not_hide_png(self) -> None:
         output = new_output(
@@ -196,7 +253,7 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        self.assertIsInstance(render_output(output), TerminalImage)
+        self.assertIsInstance(render_output(output), Image.Image)
 
     def test_raw_png_bytes_are_rendered(self) -> None:
         png = self._png_bytes()
@@ -214,7 +271,7 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
             _image_from_data("data:image/png;base64," + base64.b64encode(png).decode()),
             Image.Image,
         )
-        self.assertIsInstance(render_output(output), TerminalImage)
+        self.assertIsInstance(render_output(output), Image.Image)
 
     def test_binary_mime_payloads_are_base64_encoded(self) -> None:
         png = self._png_bytes()
@@ -230,7 +287,20 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(encoded["image/png"], base64.b64encode(png).decode())
         self.assertEqual(encoded["application/pdf"], base64.b64encode(b"%PDF").decode())
         output = new_output("display_data", data=encoded)
-        self.assertIsInstance(render_output(output), TerminalImage)
+        self.assertIsInstance(render_output(output), Image.Image)
+
+    async def test_image_output_mounts_terminal_image_widget(self) -> None:
+        output = new_output(
+            "display_data",
+            data={"image/png": base64.b64encode(self._png_bytes()).decode()},
+        )
+        app = NbVim(NotebookModel(cells=[CellModel(outputs=[output])]))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            image = app.query_one(OutputImage)
+            self.assertIsInstance(image, OutputImage)
+            self.assertTrue(image.has_class("cell-output-image"))
+            self.assertIsInstance(app.query_one(OutputView), OutputView)
 
     def test_output_formatting(self) -> None:
         self.assertEqual(

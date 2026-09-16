@@ -76,9 +76,10 @@ Leaving the UI any other way saves the notebook automatically.
 
 The kernel uses the interpreter from `--python`, or else the active environment (`VIRTUAL_ENV`, then `CONDA_PREFIX`). It never uses the interpreter running nbvim, and it does not guess a project `.venv`. If nothing is active, the editor still opens and running a cell reports an error.
 
-PNG, JPEG, GIF, and WebP display outputs are rendered in the terminal using
-colored Unicode blocks. Images are scaled to the available output width, so
-plots such as `matplotlib` figures can be viewed without leaving nbvim.
+PNG, JPEG, GIF, and WebP display outputs are rendered with the terminal's
+native graphics protocol when available (Kitty TGP or Sixel). Terminals without
+those protocols fall back to colored Unicode blocks. Images fill the available
+output width. matplotlib figures are captured at retina resolution.
 
 Try the included demo with:
 
