@@ -14,11 +14,42 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
 from textual.widget import Widget
 from textual.widgets import Input, Markdown, Static, TextArea
-from textual_image.widget import Image as OutputImage
+from textual_image.widget import Image as _AutoImage
+from textual_image.widget._base import Image as _BaseImage
 
 from .kernel import KernelExecutionError, ProjectKernel
 from .model import CellModel, NotebookModel
 from .vim_editor import VimTextArea
+
+
+class OutputImage(_BaseImage, Renderable=_AutoImage._Renderable):
+    """An image widget that reuses its terminal-side render across repaints.
+
+    ``textual_image``'s ``Image.render()`` unconditionally discards and
+    recreates its renderable on every call. For terminal graphics protocols
+    (Kitty TGP, Sixel) that means re-encoding and re-transmitting the full
+    image payload on every incidental repaint (scrolling past the cell,
+    a sibling cell resizing, focus changes, ...), not just when the image or
+    its rendered size actually changes. For a session with several
+    retina-resolution matplotlib figures this shows up as image cells that
+    are slow to render, or that never finish rendering because a later
+    repaint interrupts an in-flight transmission.
+
+    Skip the recreate-and-retransmit when neither the image nor its styled
+    size has changed since the last render.
+    """
+
+    def render(self) -> object:
+        if not self._image:
+            return ""
+        size = self._get_styled_size()
+        if (
+            self._renderable is not None
+            and getattr(self, "_rendered_size", None) == size
+        ):
+            return self._renderable
+        self._rendered_size = size
+        return super().render()
 
 
 def _text_value(value: object) -> str:
@@ -137,12 +168,26 @@ class OutputView(Vertical):
                 widgets.append(Static(item, markup=False, classes="cell-output-text"))
         return widgets
 
-    def update_outputs(self, outputs: list[object]) -> None:
+    async def update_outputs(self, outputs: list[object]) -> None:
+        """Replace the rendered outputs, removing old widgets before mounting new ones.
+
+        Awaiting both steps (inside a batch update) matters for image outputs:
+        image widgets negotiate terminal graphics state (e.g. Kitty image IDs) on
+        mount, and mounting a new image before the old one's cleanup has actually
+        run can leave that state inconsistent, so the new image is slow to appear
+        or never renders at all.
+        """
         self.outputs = outputs
-        self.remove_children()
         widgets = self._output_widgets()
-        if widgets:
-            self.mount(*widgets)
+        async with self.batch():
+            await self.remove_children()
+            if widgets:
+                await self.mount(*widgets)
+
+    def clear_outputs(self) -> None:
+        """Synchronously drop all outputs, e.g. when a cell stops being code."""
+        self.outputs = []
+        self.remove_children()
 
 
 class Cell(Horizontal):
@@ -156,7 +201,7 @@ class Cell(Horizontal):
         language: str = "python",
         **kwargs,
     ) -> None:
-        kwargs.setdefault("classes", "cell")
+        kwargs.setdefault("classes", "notebook-cell")
         super().__init__(**kwargs)
         self.model = model or CellModel()
         self.language = "markdown" if self.model.cell_type == "markdown" else language
@@ -225,7 +270,7 @@ class Cell(Horizontal):
             self.language = "markdown"
             self.model.outputs = []
             self.model.execution_count = None
-            self.query_one(OutputView).update_outputs([])
+            self.query_one(OutputView).clear_outputs()
             self.query_one(".marker", Static).update("[ ]")
         self._editing = False
         self.apply_presentation()
@@ -260,12 +305,12 @@ class Cell(Horizontal):
     def set_running(self) -> None:
         self.query_one(".marker", Static).update("[*]")
 
-    def set_result(
+    async def set_result(
         self, result_outputs: list[object], execution_count: int | None
     ) -> None:
         self.model.outputs = result_outputs
         self.model.execution_count = execution_count
-        self.query_one(OutputView).update_outputs(result_outputs)
+        await self.query_one(OutputView).update_outputs(result_outputs)
         count = execution_count if execution_count is not None else "-"
         self.query_one(".marker", Static).update(f"[{count}]")
 
@@ -359,7 +404,7 @@ class CellContainer(VerticalScroll):
             cell.toggle_type()
 
     def focus_relative_cell(self, offset: int) -> None:
-        cells = list(self.query(".cell"))
+        cells = list(self.query(".notebook-cell"))
         if not cells:
             return
 
@@ -375,7 +420,7 @@ class CellContainer(VerticalScroll):
 
     def delete_focused_cell(self) -> None:
         cell = self.get_focused_cell()
-        cells = list(self.query(".cell"))
+        cells = list(self.query(".notebook-cell"))
         if cell is None or cell not in cells or len(cells) == 1:
             return
 
@@ -418,7 +463,7 @@ class CellContainer(VerticalScroll):
         return True
 
     def focused_is_last(self) -> bool:
-        cells = list(self.query(".cell"))
+        cells = list(self.query(".notebook-cell"))
         focused = self.get_focused_cell()
         return bool(cells) and focused is cells[-1]
 
@@ -459,6 +504,15 @@ class NbVim(App):
     def compose(self) -> ComposeResult:
         yield CellContainer(self.notebook, id="cells")
         yield Input(id="command-bar")
+
+    def on_mount(self) -> None:
+        # Textual's default auto-focus lands on the CellContainer itself
+        # (it's a focusable VerticalScroll), not on the first Cell. That
+        # leaves get_focused_cell() returning None until something explicitly
+        # focuses a cell, so the very first j/k/r press on a fresh notebook
+        # does nothing. Focus the first cell directly so navigation and
+        # running work immediately.
+        self.query_one(CellContainer).focus_relative_cell(1)
 
     def on_key(self, event: Key) -> None:
         """Open the command bar when ``:`` is pressed in navigation mode."""
@@ -583,7 +637,7 @@ class NbVim(App):
         cell.set_running()
         try:
             result = await self.kernel.execute(cell.model.source)
-            cell.set_result(result.outputs, result.execution_count)
+            await cell.set_result(result.outputs, result.execution_count)
             return True
         except KernelExecutionError as exc:
             cell.set_error()

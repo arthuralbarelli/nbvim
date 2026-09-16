@@ -184,6 +184,96 @@ class RunKeyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kernel.calls, [])
             self.assertIs(app.query_one(CellContainer).get_focused_cell(), second)
 
+    async def test_run_advances_past_markdown_table_without_getting_stuck(self) -> None:
+        # Regression test for the same "cell" CSS class collision covered by
+        # NavigationTests, but exercised through r/run_cell (the reported
+        # symptom: repeatedly pressing r "gets stuck" on a markdown cell that
+        # renders a table, instead of advancing one cell per press).
+        kernel = FakeKernel()
+        table_source = "| A | B |\n" "| --- | --- |\n" "| 1 | 2 |\n" "| 3 | 4 |\n"
+        app = NbVim(
+            NotebookModel(
+                cells=[
+                    CellModel(cell_type="markdown", source="# Title"),
+                    CellModel(cell_type="markdown", source=table_source),
+                    CellModel(source="print('after table')"),
+                    CellModel(source="print('after code')"),
+                ]
+            )
+        )
+        app.kernel = kernel
+        async with app.run_test() as pilot:
+            first, table_cell, code_cell, last_cell = _cells(app)
+            first.focus()
+            await pilot.pause()
+
+            for _ in range(3):
+                await app.run_action("run_cell")
+                await pilot.pause()
+
+            container = app.query_one(CellContainer)
+            self.assertIs(container.get_focused_cell(), last_cell)
+            self.assertEqual(kernel.calls, ["print('after table')"])
+
+
+class NavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_first_cell_is_focused_on_mount(self) -> None:
+        # NbVim.on_mount must focus the first cell explicitly: Textual's
+        # default auto-focus otherwise lands on the CellContainer itself,
+        # so get_focused_cell() returns None and the very first j/k/r press
+        # on a freshly opened notebook is silently a no-op.
+        app = NbVim(
+            NotebookModel(
+                cells=[CellModel(source="print(1)"), CellModel(source="print(2)")]
+            )
+        )
+        kernel = FakeKernel()
+        app.kernel = kernel
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            first, second = _cells(app)
+            self.assertIs(app.query_one(CellContainer).get_focused_cell(), first)
+
+            await pilot.press("r")
+            await pilot.pause()
+            self.assertEqual(kernel.calls, ["print(1)"])
+            self.assertIs(app.query_one(CellContainer).get_focused_cell(), second)
+
+    async def test_move_down_skips_over_markdown_table_cells(self) -> None:
+        # A markdown table renders via Textual's Markdown widget, whose table
+        # cell widgets also carry the CSS class "cell". Notebook navigation
+        # must not confuse those with our own Cell widgets.
+        table_source = "| A | B |\n" "| --- | --- |\n" "| 1 | 2 |\n" "| 3 | 4 |\n"
+        app = NbVim(
+            NotebookModel(
+                cells=[
+                    CellModel(source="print('before')"),
+                    CellModel(cell_type="markdown", source=table_source),
+                    CellModel(source="print('after')"),
+                ]
+            )
+        )
+        async with app.run_test() as pilot:
+            first, table_cell, last = _cells(app)
+            first.focus()
+            await pilot.pause()
+
+            await pilot.press("j")
+            await pilot.pause()
+            self.assertIs(app.query_one(CellContainer).get_focused_cell(), table_cell)
+
+            await pilot.press("j")
+            await pilot.pause()
+            self.assertIs(app.query_one(CellContainer).get_focused_cell(), last)
+
+            await pilot.press("k")
+            await pilot.pause()
+            self.assertIs(app.query_one(CellContainer).get_focused_cell(), table_cell)
+
+            await pilot.press("k")
+            await pilot.pause()
+            self.assertIs(app.query_one(CellContainer).get_focused_cell(), first)
+
 
 class EditModeTests(unittest.IsolatedAsyncioTestCase):
     async def test_insert_types_instead_of_moving_cells(self) -> None:

@@ -10,8 +10,6 @@ from unittest.mock import patch
 
 from PIL import Image
 from nbformat.v4 import new_output
-from textual_image.widget import Image as OutputImage
-
 from nbvim.kernel import (
     ExecutionResult,
     KernelExecutionError,
@@ -28,6 +26,7 @@ from textual.widgets import Markdown, Static, TextArea
 
 from nbvim.main import (
     NbVim,
+    OutputImage,
     OutputView,
     _image_from_data,
     format_output,
@@ -302,6 +301,34 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(image.has_class("cell-output-image"))
             self.assertIsInstance(app.query_one(OutputView), OutputView)
 
+    def test_image_render_is_cached_across_unchanged_repaints(self) -> None:
+        # Regression test: textual_image's Image.render() unconditionally
+        # discards and recreates its renderable on every call, which for
+        # terminal graphics protocols (Kitty TGP, Sixel) means re-encoding and
+        # re-transmitting the full image payload on every incidental repaint,
+        # not just when the image or its size actually changes. That made
+        # rendering slow, and made images that got repainted mid-transmission
+        # (e.g. by scrolling past them) never finish rendering. nbvim's
+        # OutputImage must reuse the same renderable while nothing changed.
+        image = OutputImage(Image.new("RGB", (4, 4), (0, 0, 255)))
+
+        first = image.render()
+        second = image.render()
+        third = image.render()
+
+        self.assertIs(first, second)
+        self.assertIs(second, third)
+
+        # A genuine size change must still produce a fresh renderable.
+        image.styles.width = 5
+        resized = image.render()
+        self.assertIsNot(resized, first)
+
+        # Reassigning the image must also produce a fresh renderable.
+        image.image = Image.new("RGB", (4, 4), (0, 255, 0))
+        replaced = image.render()
+        self.assertIsNot(replaced, resized)
+
     def test_output_formatting(self) -> None:
         self.assertEqual(
             format_output(new_output("stream", name="stdout", text="hello\n")),
@@ -318,6 +345,53 @@ class OutputAndAppTests(unittest.IsolatedAsyncioTestCase):
             ),
             "ValueError: bad",
         )
+
+    async def test_rerun_replaces_image_output_cleanly(self) -> None:
+        # Regression test: re-running a cell used to call OutputView.remove_children()
+        # and .mount() without awaiting either, so the old image widget's terminal
+        # cleanup could race with the new image's mount. That left stale output
+        # widgets around and made new images slow to appear or never render.
+        first_png = self._png_bytes()
+        second_image = Image.new("RGB", (3, 3), (0, 255, 0))
+        second_bytes = io.BytesIO()
+        second_image.save(second_bytes, format="PNG")
+
+        class FakeKernel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def execute(self, source: str) -> ExecutionResult:
+                self.calls += 1
+                payload = first_png if self.calls == 1 else second_bytes.getvalue()
+                output = new_output(
+                    "display_data",
+                    data={"image/png": base64.b64encode(payload).decode()},
+                )
+                return ExecutionResult([output], execution_count=self.calls)
+
+            async def shutdown(self) -> None:
+                pass
+
+        app = NbVim(NotebookModel(cells=[CellModel(source="show(fig)")]))
+        app.kernel = FakeKernel()
+        async with app.run_test() as pilot:
+            cell = app.query_one("Cell")
+            cell.focus()
+            await pilot.pause()
+
+            await app.run_action("run_cell_stay")
+            await pilot.pause()
+            images = list(app.query(OutputImage))
+            self.assertEqual(len(images), 1)
+            self.assertEqual(images[0].image.size, (2, 2))
+
+            await app.run_action("run_cell_stay")
+            await pilot.pause()
+            images = list(app.query(OutputImage))
+            # Exactly one image widget should remain: the old one removed,
+            # the new one mounted, with nothing left over from the first run.
+            self.assertEqual(len(images), 1)
+            self.assertEqual(images[0].image.size, (3, 3))
 
     async def test_run_action_updates_focused_cell(self) -> None:
         class FakeKernel:
