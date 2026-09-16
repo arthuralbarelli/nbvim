@@ -4,19 +4,13 @@ Vim-inspired terminal UI for editing and running Jupyter `.ipynb` notebooks.
 
 Open or create a notebook, move between cells with vim-like keys, and run Python in your active environment.
 
-![nbvim rendering a notebook image output](assets/nbvim-image-demo.gif)
-
-![nbvim demo](assets/demo.gif)
+![nbvim demo](assets/nbvim-demo.gif)
 
 ## Demo
 
-A short recording of real usage against the [analysis-test](https://github.com/arthuralbarelli/analysis-test) QA notebook: opening the notebook, navigating cells with `j`/`k` (including past a markdown table), running cells with `r` through a persistent kernel (version output, a pandas table, a rendered matplotlib chart), editing a cell with vim motions (`i`/`Esc`, `yy`, `p`, `dd`), and saving with `:w`.
+A short Kitty recording against the [analysis-test](https://github.com/arthuralbarelli/analysis-test) QA notebook: opening the notebook, navigating past a markdown table, running cells with `r` through a persistent kernel, a pandas table, and a matplotlib chart rendered with the Kitty graphics protocol.
 
-<video src="assets/nbvim-demo.mp4" controls muted playsinline width="800">
-Your browser does not support the video tag. <a href="assets/nbvim-demo.mp4">Download the demo video</a>.
-</video>
-
-If the video above doesn't play inline, [download it directly](assets/nbvim-demo.mp4).
+[Download the MP4](assets/nbvim-demo.mp4)
 
 ## Requirements
 
