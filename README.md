@@ -24,18 +24,40 @@ If the path does not exist, nbvim creates a new notebook there before the UI sta
 
 ## Keybindings
 
-Bindings apply in navigation mode.
+Bindings apply in navigation mode unless noted.
 
 | Key | Action |
 | --- | --- |
 | `j` / `k` | Next / previous cell |
 | `a` / `b` | Add cell above / after |
+| `c` | Copy the focused cell |
+| `v` | Paste the copied cell below |
 | `dd` | Delete cell (press `d` twice) |
-| `Enter` | Edit cell |
-| `Esc` | Return to navigation |
-| `r` | Run the focused code cell |
+| `Enter` | Edit cell (starts in Insert) |
+| `Esc` | Insert → Normal; Normal → navigation |
+| `r` | Run the focused code cell and go to the next cell |
+| `R` | Run the focused code cell and stay |
 | `m` | Switch cell between markdown and Python |
 | `:` | Open the command bar |
+
+`r` on the last cell inserts a new code cell below and focuses it. A failed run stays on the current cell. On markdown, `r` / `R` skip the kernel: `r` still advances, `R` stays.
+
+### Edit mode
+
+The cell editor uses vim Insert, Normal, and Visual modes.
+
+| Key | Action |
+| --- | --- |
+| `i` / `a` | Insert at cursor / after cursor |
+| `h` `j` `k` `l` | Move (extend the selection in Visual) |
+| `0` / `$` | Line start / end |
+| `x` | Delete the character under the cursor |
+| `dd` / `cc` / `yy` | Delete / change / yank the current line |
+| `p` | Paste the in-cell register |
+| `u` | Undo |
+| `v` / `V` | Character / line Visual |
+
+In Visual, `d`/`x` delete the selection, `y` yanks it, and `c` deletes it and enters Insert.
 
 ## Commands
 

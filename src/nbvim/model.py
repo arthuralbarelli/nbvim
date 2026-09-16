@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -50,6 +51,16 @@ class CellModel:
         if self.cell_type == "raw":
             return nbformat.v4.new_raw_cell(source=self.source, metadata=self.metadata)
         raise ValueError(f"Unsupported cell type: {self.cell_type!r}")
+
+    def clone(self) -> "CellModel":
+        """Return an independent copy of this cell, including outputs and metadata."""
+        return CellModel(
+            cell_type=self.cell_type,
+            source=self.source,
+            metadata=deepcopy(self.metadata),
+            outputs=deepcopy(self.outputs),
+            execution_count=self.execution_count,
+        )
 
 
 @dataclass

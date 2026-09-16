@@ -16,7 +16,7 @@ from textual.widgets import Input, Markdown, Static, TextArea
 
 from .kernel import KernelExecutionError, ProjectKernel
 from .model import CellModel, NotebookModel
-
+from .vim_editor import VimTextArea
 
 MAX_TERMINAL_IMAGE_WIDTH = 60
 
@@ -40,7 +40,9 @@ class TerminalImage:
         if self.image.width == 0 or self.image.height == 0:
             return
 
-        width = max(1, min(self.image.width, options.max_width, MAX_TERMINAL_IMAGE_WIDTH))
+        width = max(
+            1, min(self.image.width, options.max_width, MAX_TERMINAL_IMAGE_WIDTH)
+        )
         height = max(1, round(self.image.height * width / self.image.width))
         image = self.image.resize((width, height), Image.Resampling.LANCZOS)
         pixels = image.load()
@@ -160,7 +162,7 @@ class Cell(Horizontal):
         is_markdown = self.model.cell_type == "markdown"
         markdown = Markdown(self.model.source, classes="cell-markdown")
         markdown.display = is_markdown
-        editor = TextArea.code_editor(
+        editor = VimTextArea.code_editor(
             text=self.model.source,
             language=self.language,
         )
@@ -187,12 +189,27 @@ class Cell(Horizontal):
 
     def enter_edit(self) -> None:
         self._editing = True
+        editor = self.query_one(VimTextArea)
+        editor.enter_insert()
         self.apply_presentation()
-        self.query_one(TextArea).focus()
+        editor.focus()
 
     def exit_edit(self) -> None:
         self._editing = False
         self.apply_presentation()
+
+    def on_vim_text_area_mode_changed(self, event: VimTextArea.ModeChanged) -> None:
+        """Keep the footer in sync with Insert / Normal / Visual."""
+        self.query_one(".cell-footer", Static).update(self._footer_text())
+        event.stop()
+
+    def on_vim_text_area_exit_to_navigation(
+        self, event: VimTextArea.ExitToNavigation
+    ) -> None:
+        """Esc in Normal mode returns to cell navigation."""
+        self.exit_edit()
+        self.focus()
+        event.stop()
 
     def toggle_type(self) -> None:
         """Switch the cell between markdown and Python code."""
@@ -221,9 +238,15 @@ class Cell(Horizontal):
         editor.display = show_editor
         editor.language = self.language
         self.query_one(OutputView).display = not is_markdown
-        self.query_one(".cell-footer", Static).update(self.language)
+        self.query_one(".cell-footer", Static).update(self._footer_text())
         if show_editor:
             self._sync_editor_height()
+
+    def _footer_text(self) -> str:
+        if self._editing:
+            mode = self.query_one(VimTextArea).vim_mode.value
+            return f"{self.language}  -- {mode} --"
+        return self.language
 
     def _sync_editor_height(self) -> None:
         editor = self.query_one(TextArea)
@@ -252,6 +275,7 @@ class CellContainer(VerticalScroll):
     def __init__(self, notebook: NotebookModel | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.notebook = notebook or NotebookModel.new()
+        self._clipboard: CellModel | None = None
 
     def compose(self) -> ComposeResult:
         if not self.notebook.cells:
@@ -360,6 +384,40 @@ class CellContainer(VerticalScroll):
         self.notebook.remove_cell(self.notebook.cells.index(cell.model))
         cell.remove()
 
+    def copy_focused_cell(self) -> bool:
+        cell = self.get_focused_cell()
+        if cell is None:
+            return False
+        self._clipboard = cell.model.clone()
+        return True
+
+    async def paste_after_focused(self) -> bool:
+        if self._clipboard is None:
+            return False
+        focused_cell = self.get_focused_cell()
+        model = self._clipboard.clone()
+        cell_index = (
+            self.notebook.cells.index(focused_cell.model) + 1
+            if focused_cell is not None
+            else len(self.notebook.cells)
+        )
+        self.notebook.add_cell(model, cell_index)
+        cell = self.create_cell(model)
+
+        if focused_cell is None:
+            await self.mount(cell)
+        else:
+            focused_cell.exit_edit()
+            await self.mount(cell, after=focused_cell)
+
+        cell.focus()
+        return True
+
+    def focused_is_last(self) -> bool:
+        cells = list(self.query(".cell"))
+        focused = self.get_focused_cell()
+        return bool(cells) and focused is cells[-1]
+
 
 class NbVim(App):
     CSS_PATH = Path(__file__).with_name("app.tcss")
@@ -380,15 +438,18 @@ class NbVim(App):
         self._cell_running = False
 
     BINDINGS = [
-        Binding("b", "add_cell", "Add cell", priority=True),
-        Binding("d", "delete_cell", "Delete cell", priority=True),
-        Binding("j", "move_down", "Move to next cell", priority=True),
-        Binding("k", "move_up", "Move to previous cell", priority=True),
-        Binding("a", "add_cell_above", "Add cell above", priority=True),
-        Binding("r", "run_cell", "Run cell", priority=True),
+        Binding("b", "add_cell", "Add cell"),
+        Binding("d", "delete_cell", "Delete cell"),
+        Binding("j", "move_down", "Move to next cell"),
+        Binding("k", "move_up", "Move to previous cell"),
+        Binding("a", "add_cell_above", "Add cell above"),
+        Binding("c", "copy_cell", "Copy cell"),
+        Binding("v", "paste_cell", "Paste cell"),
+        Binding("r", "run_cell", "Run cell and go to next"),
+        Binding("shift+r", "run_cell_stay", "Run cell and stay"),
         Binding("m", "toggle_cell_type", "Switch markdown/python"),
         Binding("enter", "edit_cell", "Edit cell"),
-        Binding("escape", "navigate_cell", "Navigate cells", priority=True),
+        Binding("escape", "navigate_cell", "Navigate cells"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -442,57 +503,105 @@ class NbVim(App):
             return
         self.notebook.save(self.path)
 
+    def _is_editing(self) -> bool:
+        return isinstance(self.focused, TextArea)
+
     async def action_add_cell(self) -> None:
+        if self._is_editing():
+            return
         await self.query_one(CellContainer).add_cell_after_focused()
 
     def action_move_down(self) -> None:
+        if self._is_editing():
+            return
         self.query_one(CellContainer).focus_relative_cell(1)
 
     def action_move_up(self) -> None:
+        if self._is_editing():
+            return
         self.query_one(CellContainer).focus_relative_cell(-1)
 
     async def action_add_cell_above(self) -> None:
+        if self._is_editing():
+            return
         await self.query_one(CellContainer).add_cell_above_focused()
 
+    def action_copy_cell(self) -> None:
+        if self._is_editing():
+            return
+        self.query_one(CellContainer).copy_focused_cell()
+
+    async def action_paste_cell(self) -> None:
+        if self._is_editing():
+            return
+        pasted = await self.query_one(CellContainer).paste_after_focused()
+        if not pasted:
+            self.notify("Nothing to paste", severity="warning")
+
     def action_edit_cell(self) -> None:
+        if self._is_editing():
+            return
         self.query_one(CellContainer).edit_focused_cell()
 
     def action_navigate_cell(self) -> None:
         self.query_one(CellContainer).navigate_focused_cell()
 
     def action_toggle_cell_type(self) -> None:
+        if self._is_editing():
+            return
         self.query_one(CellContainer).toggle_focused_cell_type()
 
     async def action_run_cell(self) -> None:
-        """Execute the focused code cell in the persistent project kernel."""
+        """Run the focused cell, then move to the next one."""
+        if await self._execute_focused_cell():
+            await self._advance_after_run()
+
+    async def action_run_cell_stay(self) -> None:
+        """Run the focused cell and keep focus where it is."""
+        await self._execute_focused_cell()
+
+    async def _execute_focused_cell(self) -> bool:
+        """Execute the focused code cell. Return True when advancing is allowed."""
+        if self._is_editing():
+            return False
         if self._cell_running:
             self.notify("A cell is already running", severity="warning")
-            return
+            return False
 
         cell = self.query_one(CellContainer).get_focused_cell()
         if cell is None:
             self.notify("No cell is focused", severity="warning")
-            return
+            return False
         if cell.model.cell_type != "code":
-            self.notify("Only code cells can be executed", severity="warning")
-            return
+            return True
 
         self._cell_running = True
         cell.set_running()
         try:
             result = await self.kernel.execute(cell.model.source)
             cell.set_result(result.outputs, result.execution_count)
+            return True
         except KernelExecutionError as exc:
             cell.set_error()
             self.notify(str(exc), severity="error", timeout=8)
+            return False
         finally:
             self._cell_running = False
+
+    async def _advance_after_run(self) -> None:
+        container = self.query_one(CellContainer)
+        if container.focused_is_last():
+            await container.add_cell_after_focused()
+            return
+        container.focus_relative_cell(1)
 
     async def on_unmount(self) -> None:
         await self.kernel.shutdown()
 
     def action_delete_cell(self) -> None:
         """Delete the focused cell after two consecutive presses of ``d``."""
+        if self._is_editing():
+            return
         if self._delete_pending:
             self._delete_pending = False
             if self._delete_timer is not None:
