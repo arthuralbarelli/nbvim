@@ -29,10 +29,7 @@
 }
 
 .cell-output-image {
-    /* textual-image treats a non-auto width as an already-resolved cell
-       count (content_size.width). width: 100% is often 0 during the first
-       layout pass, which collapses TGP/Sixel images to 0x0. auto uses the
-       parent max width and keeps aspect ratio. */
+    /* textual-image: non-auto width is a cell count, so 100% can be 0x0. */
     width: auto;
     height: auto;
 }
