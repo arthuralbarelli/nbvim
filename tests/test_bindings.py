@@ -184,6 +184,37 @@ class RunKeyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kernel.calls, [])
             self.assertIs(app.query_one(CellContainer).get_focused_cell(), second)
 
+    async def test_run_advances_past_markdown_table_without_getting_stuck(self) -> None:
+        # Regression test for the same "cell" CSS class collision covered by
+        # NavigationTests, but exercised through r/run_cell (the reported
+        # symptom: repeatedly pressing r "gets stuck" on a markdown cell that
+        # renders a table, instead of advancing one cell per press).
+        kernel = FakeKernel()
+        table_source = "| A | B |\n" "| --- | --- |\n" "| 1 | 2 |\n" "| 3 | 4 |\n"
+        app = NbVim(
+            NotebookModel(
+                cells=[
+                    CellModel(cell_type="markdown", source="# Title"),
+                    CellModel(cell_type="markdown", source=table_source),
+                    CellModel(source="print('after table')"),
+                    CellModel(source="print('after code')"),
+                ]
+            )
+        )
+        app.kernel = kernel
+        async with app.run_test() as pilot:
+            first, table_cell, code_cell, last_cell = _cells(app)
+            first.focus()
+            await pilot.pause()
+
+            for _ in range(3):
+                await app.run_action("run_cell")
+                await pilot.pause()
+
+            container = app.query_one(CellContainer)
+            self.assertIs(container.get_focused_cell(), last_cell)
+            self.assertEqual(kernel.calls, ["print('after table')"])
+
 
 class NavigationTests(unittest.IsolatedAsyncioTestCase):
     async def test_first_cell_is_focused_on_mount(self) -> None:
