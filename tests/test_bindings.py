@@ -186,6 +186,28 @@ class RunKeyTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_first_cell_is_focused_on_mount(self) -> None:
+        # NbVim.on_mount must focus the first cell explicitly: Textual's
+        # default auto-focus otherwise lands on the CellContainer itself,
+        # so get_focused_cell() returns None and the very first j/k/r press
+        # on a freshly opened notebook is silently a no-op.
+        app = NbVim(
+            NotebookModel(
+                cells=[CellModel(source="print(1)"), CellModel(source="print(2)")]
+            )
+        )
+        kernel = FakeKernel()
+        app.kernel = kernel
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            first, second = _cells(app)
+            self.assertIs(app.query_one(CellContainer).get_focused_cell(), first)
+
+            await pilot.press("r")
+            await pilot.pause()
+            self.assertEqual(kernel.calls, ["print(1)"])
+            self.assertIs(app.query_one(CellContainer).get_focused_cell(), second)
+
     async def test_move_down_skips_over_markdown_table_cells(self) -> None:
         # A markdown table renders via Textual's Markdown widget, whose table
         # cell widgets also carry the CSS class "cell". Notebook navigation

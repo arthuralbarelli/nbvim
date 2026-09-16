@@ -460,6 +460,15 @@ class NbVim(App):
         yield CellContainer(self.notebook, id="cells")
         yield Input(id="command-bar")
 
+    def on_mount(self) -> None:
+        # Textual's default auto-focus lands on the CellContainer itself
+        # (it's a focusable VerticalScroll), not on the first Cell. That
+        # leaves get_focused_cell() returning None until something explicitly
+        # focuses a cell, so the very first j/k/r press on a fresh notebook
+        # does nothing. Focus the first cell directly so navigation and
+        # running work immediately.
+        self.query_one(CellContainer).focus_relative_cell(1)
+
     def on_key(self, event: Key) -> None:
         """Open the command bar when ``:`` is pressed in navigation mode."""
         if event.character == ":" and not isinstance(self.focused, TextArea):
