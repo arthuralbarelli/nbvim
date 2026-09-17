@@ -1,0 +1,119 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" != v* ]]; then
+            echo "Expected a v* tag, got ${tag}" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          if [[ -z "$version" ]]; then
+            echo "Tag ${tag} has an empty version" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Publishing nbvim ${version} from tag ${tag}"
+
+      - name: Set package version from tag
+        run: uv version "${{ steps.version.outputs.version }}" --frozen
+
+      - name: Build
+        run: uv build --no-sources
+
+      - name: Verify dist matches tag
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os, sys, zipfile
+          from pathlib import Path
+
+          version = os.environ["PACKAGE_VERSION"]
+          dist = Path("dist")
+          wheel = dist / f"nbvim-{version}-py3-none-any.whl"
+          sdist = dist / f"nbvim-{version}.tar.gz"
+          found = sorted(p.name for p in dist.iterdir()) if dist.is_dir() else []
+          if not wheel.is_file():
+              print(f"missing {wheel.name}; dist has {found}", file=sys.stderr)
+              sys.exit(1)
+          if not sdist.is_file():
+              print(f"missing {sdist.name}; dist has {found}", file=sys.stderr)
+              sys.exit(1)
+          with zipfile.ZipFile(wheel) as zf:
+              names = zf.namelist()
+              if "nbvim/app.tcss" not in names:
+                  print("wheel is missing nbvim/app.tcss", names, file=sys.stderr)
+                  sys.exit(1)
+              meta_name = next(n for n in names if n.endswith(".dist-info/METADATA"))
+              text = zf.read(meta_name).decode()
+              got = next(line.split(" ", 1)[1] for line in text.splitlines() if line.startswith("Version: "))
+              if got != version:
+                  print(f"METADATA Version {got!r} != tag version {version!r}", file=sys.stderr)
+                  sys.exit(1)
+          print(f"verified nbvim {version}")
+          PY
+
+      - name: Smoke test wheel
+        run: |
+          set -euo pipefail
+          wheel=$(echo dist/*.whl)
+          uv run --isolated --no-project --with "$wheel" -- python -c "import nbvim; from pathlib import Path; p = Path(nbvim.__file__).with_name('app.tcss'); assert p.is_file(), p"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/nbvim
+    permissions:
+      id-token: write
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        run: uv publish --trusted-publishing always

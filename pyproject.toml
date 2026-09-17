@@ -17,6 +17,10 @@ dependencies = [
     "textual[syntax]>=8.2.8",
 ]
 
+[project.urls]
+Homepage = "https://github.com/arthuralbarelli/nbvim"
+Repository = "https://github.com/arthuralbarelli/nbvim"
+
 [project.scripts]
 nbvim = "nbvim:main"
 
