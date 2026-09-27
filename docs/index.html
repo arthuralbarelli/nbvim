@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>nbvim — vim-inspired terminal UI for Jupyter notebooks</title>
+    <meta
+      name="description"
+      content="nbvim is a vim-inspired terminal UI for editing and running Jupyter notebooks. Install with pipx, open an .ipynb, and run Python in your active environment."
+    />
+    <link rel="canonical" href="https://arthuralbarelli.github.io/nbvim/" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <meta property="og:title" content="nbvim" />
+    <meta
+      property="og:description"
+      content="Vim-inspired terminal UI for Jupyter notebooks."
+    />
+    <meta
+      property="og:url"
+      content="https://arthuralbarelli.github.io/nbvim/"
+    />
+    <meta
+      property="og:image"
+      content="https://arthuralbarelli.github.io/nbvim/assets/nbvim-demo.gif"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="top">
+      <a class="logo" href="./"
+        ><span class="caret" aria-hidden="true"></span>nbvim</a
+      >
+      <nav aria-label="Page">
+        <a href="#install">Install</a>
+        <a href="#keys">Keys</a>
+        <a href="https://github.com/arthuralbarelli/nbvim">GitHub</a>
+        <a href="https://pypi.org/project/nbvim/">PyPI</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <p class="kicker">Terminal UI</p>
+        <h1>Jupyter notebooks, with vim keys.</h1>
+        <p class="lede">
+          Open or create a <code>.ipynb</code>, move between cells like vim, and
+          run Python in your active environment — all in the terminal.
+        </p>
+
+        <div class="install" id="install">
+          <p class="prompt-label">Install</p>
+          <pre><code>pipx install nbvim
+nbvim path/to/notebook.ipynb</code></pre>
+          <p class="req">Python 3.13+</p>
+        </div>
+
+        <p class="ctas">
+          <a class="btn" href="https://github.com/arthuralbarelli/nbvim"
+            >GitHub</a
+          >
+          <a class="btn btn-ghost" href="https://pypi.org/project/nbvim/"
+            >PyPI</a
+          >
+        </p>
+      </section>
+
+      <figure class="demo">
+        <img
+          src="assets/nbvim-demo.gif"
+          alt="nbvim demo: opening a notebook in the terminal, navigating cells, running Python, and showing a chart"
+          width="800"
+          height="500"
+        />
+        <figcaption>
+          Kitty recording against the
+          <a href="https://github.com/arthuralbarelli/analysis-test"
+            >analysis-test</a
+          >
+          QA notebook: navigate, run with <kbd>r</kbd>, pandas, matplotlib.
+        </figcaption>
+      </figure>
+
+      <section class="keys" id="keys">
+        <h2>Keybindings</h2>
+        <p class="keys-note">
+          Bindings apply in navigation mode unless noted. The cell editor uses
+          Insert, Normal, and Visual.
+        </p>
+
+        <div class="key-grid">
+          <div>
+            <h3>Navigate</h3>
+            <table>
+              <tbody>
+                <tr>
+                  <th><kbd>j</kbd> <kbd>k</kbd></th>
+                  <td>Next / previous cell</td>
+                </tr>
+                <tr>
+                  <th><kbd>a</kbd> <kbd>b</kbd></th>
+                  <td>Add cell above / after</td>
+                </tr>
+                <tr>
+                  <th><kbd>c</kbd> <kbd>v</kbd></th>
+                  <td>Copy / paste below</td>
+                </tr>
+                <tr>
+                  <th><kbd>dd</kbd></th>
+                  <td>Delete cell</td>
+                </tr>
+                <tr>
+                  <th><kbd>Enter</kbd></th>
+                  <td>Edit (starts in Insert)</td>
+                </tr>
+                <tr>
+                  <th><kbd>Esc</kbd></th>
+                  <td>Back toward navigation</td>
+                </tr>
+                <tr>
+                  <th><kbd>r</kbd> <kbd>R</kbd></th>
+                  <td>Run, then next / stay</td>
+                </tr>
+                <tr>
+                  <th><kbd>m</kbd></th>
+                  <td>Markdown ↔ Python</td>
+                </tr>
+                <tr>
+                  <th><kbd>:</kbd></th>
+                  <td>Command bar</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div>
+            <h3>Edit</h3>
+            <table>
+              <tbody>
+                <tr>
+                  <th><kbd>i</kbd> <kbd>a</kbd></th>
+                  <td>Insert at / after cursor</td>
+                </tr>
+                <tr>
+                  <th><kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd></th>
+                  <td>Move</td>
+                </tr>
+                <tr>
+                  <th><kbd>0</kbd> <kbd>$</kbd></th>
+                  <td>Line start / end</td>
+                </tr>
+                <tr>
+                  <th><kbd>x</kbd></th>
+                  <td>Delete character</td>
+                </tr>
+                <tr>
+                  <th><kbd>dd</kbd> <kbd>cc</kbd> <kbd>yy</kbd></th>
+                  <td>Delete / change / yank line</td>
+                </tr>
+                <tr>
+                  <th><kbd>p</kbd> <kbd>u</kbd></th>
+                  <td>Paste / undo</td>
+                </tr>
+                <tr>
+                  <th><kbd>v</kbd> <kbd>V</kbd></th>
+                  <td>Character / line Visual</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div>
+            <h3>Commands</h3>
+            <table>
+              <tbody>
+                <tr>
+                  <th><kbd>:w</kbd></th>
+                  <td>Save</td>
+                </tr>
+                <tr>
+                  <th><kbd>:q</kbd></th>
+                  <td>Quit without saving</td>
+                </tr>
+                <tr>
+                  <th><kbd>:wq</kbd></th>
+                  <td>Save and quit</td>
+                </tr>
+                <tr>
+                  <th><kbd>:q!</kbd></th>
+                  <td>Quit without saving</td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="aside">
+              Leaving the UI any other way saves the notebook automatically.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        <a href="https://github.com/arthuralbarelli/nbvim">GitHub</a>
+        ·
+        <a href="https://pypi.org/project/nbvim/">PyPI</a>
+        ·
+        <a href="https://pipx.pypa.io/">pipx</a>
+      </p>
+      <p class="muted">Arthur Albarelli</p>
+    </footer>
+  </body>
+</html>
