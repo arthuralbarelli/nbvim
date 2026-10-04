@@ -173,6 +173,11 @@ def render_output(output: object) -> str | Image.Image:
     return format_output(output)
 
 
+def _has_visible_output(outputs: list[object]) -> bool:
+    """True when an output would draw text or an image in the cell."""
+    return any(render_output(output) != "" for output in outputs)
+
+
 class OutputView(Vertical):
     """Render the outputs currently stored on a cell."""
 
@@ -218,7 +223,11 @@ class OutputView(Vertical):
 
 
 class Cell(Horizontal):
-    """A focusable cell with a marker, editor, and language footer."""
+    """A focusable cell with a marker, editor, and language footer.
+
+    In the notebook's preview view the editor, marker, and footer stay
+    hidden. Markdown stays rendered and a code cell shows only its outputs.
+    """
 
     can_focus = True
 
@@ -253,16 +262,20 @@ class Cell(Horizontal):
         editor.display = not is_markdown
         output = OutputView(self.model.outputs, classes="cell-output")
         output.display = not is_markdown
+        # Blank row used when preview has a code cell with nothing to show.
+        quiet = Static("", classes="cell-quiet", markup=False)
+        quiet.display = False
         yield Static(self._bracket_marker(), classes="marker")
         with Vertical(classes="cell-editor"):
             yield markdown
             yield editor
             yield output
+            yield quiet
             yield Static(self.language, classes="cell-footer")
 
     def on_mount(self) -> None:
         self._update_marker()
-        self._sync_editor_height()
+        self.apply_presentation()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Keep the notebook model and cell height in sync with the editor."""
@@ -314,19 +327,50 @@ class Cell(Horizontal):
         self._editing = False
         self.apply_presentation()
 
+    def _in_preview(self) -> bool:
+        """True when the notebook is in the reading view and this cell is not open."""
+        return getattr(self.app, "view_mode", "edit") == "preview" and not self._editing
+
     def apply_presentation(self) -> None:
-        """Show a markdown preview, or the code editor, based on cell type."""
+        """Show edit chrome, or a reading view of the finished cell.
+
+        Edit shows the code editor (and rendered markdown when not editing).
+        Preview keeps markdown rendered and shows code outputs only. Assigning
+        ``TextArea.language`` always rebuilds the document, so it is set only
+        when the language actually changes.
+        """
         is_markdown = self.model.cell_type == "markdown"
-        show_editor = not is_markdown or self._editing
         markdown = self.query_one(".cell-markdown", Markdown)
         editor = self.query_one(TextArea)
+        output = self.query_one(OutputView)
+        footer = self.query_one(".cell-footer", Static)
+        marker = self.query_one(".marker", Static)
+        quiet = self.query_one(".cell-quiet", Static)
+
+        if self._in_preview():
+            markdown.display = is_markdown
+            if markdown.display:
+                markdown.update(self.model.source)
+            editor.display = False
+            footer.display = False
+            marker.display = False
+            show_output = not is_markdown and _has_visible_output(self.model.outputs)
+            output.display = show_output
+            quiet.display = not is_markdown and not show_output
+            return
+
+        show_editor = not is_markdown or self._editing
         markdown.display = is_markdown and not self._editing
         if markdown.display:
             markdown.update(self.model.source)
         editor.display = show_editor
-        editor.language = self.language
-        self.query_one(OutputView).display = not is_markdown
-        self.query_one(".cell-footer", Static).update(self._footer_text())
+        if editor.language != self.language:
+            editor.language = self.language
+        output.display = not is_markdown
+        footer.display = True
+        footer.update(self._footer_text())
+        marker.display = True
+        quiet.display = False
         if show_editor:
             self._sync_editor_height()
 
@@ -395,6 +439,7 @@ class Cell(Horizontal):
         await self.query_one(OutputView).update_outputs(result_outputs)
         count = execution_count if execution_count is not None else "-"
         self.query_one(".marker", Static).update(f"[{count}]")
+        self.apply_presentation()
 
     def set_error(self) -> None:
         self.query_one(".marker", Static).update("[!]")
@@ -778,6 +823,8 @@ class NbVim(App):
         self._resync_edited_cell = False
         self._force_disk_read = False
         self._preserve_source: tuple[str, str] | None = None
+        # "edit" is the working notebook. "preview" is the reading view.
+        self.view_mode = "edit"
 
     BINDINGS = [
         Binding("b", "add_cell", "Add cell"),
@@ -790,11 +837,13 @@ class NbVim(App):
         Binding("r", "run_cell", "Run cell and go to next"),
         Binding("shift+r", "run_cell_stay", "Run cell and stay"),
         Binding("m", "toggle_cell_type", "Switch markdown/python"),
+        Binding("p", "toggle_preview", "Toggle preview"),
         Binding("enter", "edit_cell", "Edit cell"),
         Binding("escape", "navigate_cell", "Navigate cells"),
     ]
 
     def compose(self) -> ComposeResult:
+        yield Static(self.view_mode, id="mode-status")
         yield CellContainer(self.notebook, id="cells")
         yield Input(id="command-bar")
 
@@ -847,6 +896,8 @@ class NbVim(App):
         elif command == "q!":
             self.save_on_exit = False
             self.exit()
+        elif command == "preview":
+            self.action_toggle_preview()
         else:
             self.notify(f"Not an nbvim command: :{command}", severity="error")
             command_bar.styles.display = "block"
@@ -997,7 +1048,26 @@ class NbVim(App):
     def action_edit_cell(self) -> None:
         if self._is_editing():
             return
+        # Leave the reading view first so Enter still opens the vim editor.
+        if self.view_mode == "preview":
+            self._set_view_mode("edit")
         self.query_one(CellContainer).edit_focused_cell()
+
+    def action_toggle_preview(self) -> None:
+        """Switch between the edit notebook and the reading preview.
+
+        Preview hides code source and vim chrome. It does not enter vim
+        insert; that still happens from the edit view with Enter.
+        """
+        if self._is_editing():
+            return
+        self._set_view_mode("edit" if self.view_mode == "preview" else "preview")
+
+    def _set_view_mode(self, mode: str) -> None:
+        self.view_mode = mode
+        self.query_one("#mode-status", Static).update(mode)
+        for cell in self.query(Cell):
+            cell.apply_presentation()
 
     def action_navigate_cell(self) -> None:
         self.query_one(CellContainer).navigate_focused_cell()
