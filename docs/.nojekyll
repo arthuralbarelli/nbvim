@@ -1,0 +1,2 @@
+# GitHub Pages: skip Jekyll so files like .nojekyll stay as-is if this
+# directory is ever served from a branch instead of the Actions artifact.

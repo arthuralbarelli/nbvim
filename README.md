@@ -2,6 +2,8 @@
 
 Vim-inspired terminal UI for editing and running Jupyter `.ipynb` notebooks.
 
+[Project page](https://arthuralbarelli.github.io/nbvim/) · [PyPI](https://pypi.org/project/nbvim/)
+
 Open or create a notebook, move between cells with vim-like keys, and run Python in your active environment.
 
 ![nbvim demo](assets/nbvim-demo.gif)
@@ -141,6 +143,12 @@ nbvim path/to/notebook.ipynb
 
 nbvim --python /path/to/python path/to/notebook.ipynb
 ```
+
+## Website
+
+The project page is [https://arthuralbarelli.github.io/nbvim/](https://arthuralbarelli.github.io/nbvim/). It is the static site in `docs/` plus `assets/nbvim-demo.gif`, published by `.github/workflows/pages.yml` on every push to `master`.
+
+One-time: [Settings → Pages](https://github.com/arthuralbarelli/nbvim/settings/pages) → **Build and deployment** → **Source** → **GitHub Actions**. After that, merges deploy with no extra clicks.
 
 ## Develop
 

@@ -1,0 +1,62 @@
+# Project page: https://arthuralbarelli.github.io/nbvim/
+#
+# Deploys the static site in docs/ plus assets/nbvim-demo.gif after every
+# push to master. Pull requests only assemble the artifact (no deploy).
+#
+# One-time (repo Settings → Pages): Build and deployment → Source →
+# GitHub Actions. After that, merges to master publish with no extra clicks.
+# https://github.com/arthuralbarelli/nbvim/settings/pages
+
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir -p _site/assets
+          cp docs/index.html docs/styles.css docs/favicon.svg docs/.nojekyll _site/
+          cp assets/nbvim-demo.gif _site/assets/nbvim-demo.gif
+          test -s _site/index.html
+          test -s _site/assets/nbvim-demo.gif
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+          include-hidden-files: true
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
