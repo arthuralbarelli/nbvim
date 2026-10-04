@@ -26,6 +26,7 @@ from nbvim.kernel import (
 from textual.widgets import Markdown, Static, TextArea
 
 from nbvim.main import (
+    Cell,
     NbVim,
     OutputImage,
     OutputView,
@@ -523,6 +524,48 @@ class CellTypeTests(unittest.IsolatedAsyncioTestCase):
             markdown = cell.query_one(".cell-markdown", Markdown)
             self.assertTrue(markdown.display)
             self.assertEqual(markdown.source, "# Title")
+
+    async def test_markdown_cells_have_no_bracket_marker(self) -> None:
+        app = NbVim(
+            NotebookModel(
+                cells=[
+                    CellModel(cell_type="markdown", source="# Title"),
+                    CellModel(source="print(1)"),
+                    CellModel(source="print(2)", execution_count=2),
+                ]
+            )
+        )
+
+        def marker(cell: Cell) -> str:
+            return str(cell.query_one(".marker", Static).render())
+
+        async with app.run_test() as pilot:
+            markdown_cell, idle_code, counted_code = list(app.query("Cell"))
+            await pilot.pause()
+
+            self.assertEqual(marker(markdown_cell), "")
+            self.assertEqual(marker(idle_code), "[ ]")
+            self.assertEqual(marker(counted_code), "[2]")
+
+            markdown_cell.focus()
+            await pilot.pause()
+            await app.run_action("toggle_cell_type")
+            await pilot.pause()
+            self.assertEqual(markdown_cell.model.cell_type, "code")
+            self.assertEqual(marker(markdown_cell), "[ ]")
+
+            await app.run_action("toggle_cell_type")
+            await pilot.pause()
+            self.assertEqual(markdown_cell.model.cell_type, "markdown")
+            self.assertEqual(marker(markdown_cell), "")
+
+            idle_code.set_running()
+            self.assertEqual(marker(idle_code), "[*]")
+            await idle_code.set_result([], 7, 0.0)
+            self.assertEqual(marker(idle_code), "[7]")
+            idle_code.set_error()
+            self.assertEqual(marker(idle_code), "[!]")
+            self.assertEqual(marker(markdown_cell), "")
 
 
 class DurationTests(unittest.IsolatedAsyncioTestCase):

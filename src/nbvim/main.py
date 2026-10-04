@@ -1,9 +1,11 @@
 import argparse
 import base64
 import binascii
+import hashlib
 from io import BytesIO
 from pathlib import Path
 
+import nbformat
 from PIL import Image, UnidentifiedImageError
 
 # Query TGP/Sixel support before Textual starts I/O threads.
@@ -12,6 +14,7 @@ from textual.app import App, ComposeResult
 from textual.events import Key
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
+from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, Markdown, Static, TextArea
 from textual_image.widget import Image as _AutoImage
@@ -50,6 +53,30 @@ class OutputImage(_BaseImage, Renderable=_AutoImage._Renderable):
             return self._renderable
         self._rendered_size = size
         return super().render()
+
+
+# How long to wait between checks of the open notebook. Short enough that an
+# edit saved from another pane shows up while you watch, long enough that a
+# notebook with images is not re-read on every frame.
+_RELOAD_POLL_SECONDS = 0.5
+_UNREADABLE_RETRIES = 2
+
+
+def _disk_signature(path: Path) -> tuple[int, int] | None:
+    """Return ``(mtime_ns, size)`` for ``path``, or None if it cannot be stat'ed."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _file_digest(path: Path) -> str | None:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(data).hexdigest()
 
 
 def _text_value(value: object) -> str:
@@ -146,6 +173,11 @@ def render_output(output: object) -> str | Image.Image:
     return format_output(output)
 
 
+def _has_visible_output(outputs: list[object]) -> bool:
+    """True when an output would draw text or an image in the cell."""
+    return any(render_output(output) != "" for output in outputs)
+
+
 class OutputView(Vertical):
     """Render the outputs currently stored on a cell."""
 
@@ -191,9 +223,21 @@ class OutputView(Vertical):
 
 
 class Cell(Horizontal):
-    """A focusable cell with a marker, editor, and language footer."""
+    """A focusable cell with a marker, editor, and language footer.
+
+    In the notebook's preview view the editor, marker, and footer stay
+    hidden. Markdown stays rendered and a code cell shows only its outputs.
+    """
 
     can_focus = True
+
+    class EditFinished(Message):
+        """The cell left edit mode and is back in navigation."""
+
+        def __init__(self, cell_id: str, source: str) -> None:
+            super().__init__()
+            self.cell_id = cell_id
+            self.source = source
 
     def __init__(
         self,
@@ -219,18 +263,20 @@ class Cell(Horizontal):
         editor.display = not is_markdown
         output = OutputView(self.model.outputs, classes="cell-output")
         output.display = not is_markdown
-        yield Static("[ ]", classes="marker")
+        # Blank row used when preview has a code cell with nothing to show.
+        quiet = Static("", classes="cell-quiet", markup=False)
+        quiet.display = False
+        yield Static(self._bracket_marker(), classes="marker")
         with Vertical(classes="cell-editor"):
             yield markdown
             yield editor
             yield output
+            yield quiet
             yield Static(self.language, classes="cell-footer")
 
     def on_mount(self) -> None:
-        if self.model.cell_type == "code" and self.model.execution_count is not None:
-            self.query_one(".marker", Static).update(f"[{self.model.execution_count}]")
-        self._refresh_footer()
-        self._sync_editor_height()
+        self._update_marker()
+        self.apply_presentation()
         self._ready = True
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -250,8 +296,13 @@ class Cell(Horizontal):
         editor.focus()
 
     def exit_edit(self) -> None:
+        if not self._editing:
+            self.apply_presentation()
+            return
         self._editing = False
+        source = self.query_one(VimTextArea).text
         self.apply_presentation()
+        self.post_message(self.EditFinished(self.model.id or "", source))
 
     def on_vim_text_area_mode_changed(self, event: VimTextArea.ModeChanged) -> None:
         """Keep the footer in sync with Insert / Normal / Visual."""
@@ -277,23 +328,54 @@ class Cell(Horizontal):
             self.model.outputs = []
             self.model.execution_count = None
             self.query_one(OutputView).clear_outputs()
-            self.query_one(".marker", Static).update("[ ]")
+        self.query_one(".marker", Static).update(self._bracket_marker())
         self._editing = False
         self.apply_presentation()
 
+    def _in_preview(self) -> bool:
+        """True when the notebook is in the reading view and this cell is not open."""
+        return getattr(self.app, "view_mode", "edit") == "preview" and not self._editing
+
     def apply_presentation(self) -> None:
-        """Show a markdown preview, or the code editor, based on cell type."""
+        """Show edit chrome, or a reading view of the finished cell.
+
+        Edit shows the code editor (and rendered markdown when not editing).
+        Preview keeps markdown rendered and shows code outputs only. Assigning
+        ``TextArea.language`` always rebuilds the document, so it is set only
+        when the language actually changes.
+        """
         is_markdown = self.model.cell_type == "markdown"
-        show_editor = not is_markdown or self._editing
         markdown = self.query_one(".cell-markdown", Markdown)
         editor = self.query_one(TextArea)
+        output = self.query_one(OutputView)
+        footer = self.query_one(".cell-footer", Static)
+        marker = self.query_one(".marker", Static)
+        quiet = self.query_one(".cell-quiet", Static)
+
+        if self._in_preview():
+            markdown.display = is_markdown
+            if markdown.display:
+                markdown.update(self.model.source)
+            editor.display = False
+            footer.display = False
+            marker.display = False
+            show_output = not is_markdown and _has_visible_output(self.model.outputs)
+            output.display = show_output
+            quiet.display = not is_markdown and not show_output
+            return
+
+        show_editor = not is_markdown or self._editing
         markdown.display = is_markdown and not self._editing
         if markdown.display:
             markdown.update(self.model.source)
         editor.display = show_editor
-        editor.language = self.language
-        self.query_one(OutputView).display = not is_markdown
-        self._refresh_footer()
+        if editor.language != self.language:
+            editor.language = self.language
+        output.display = not is_markdown
+        footer.display = True
+        footer.update(self._footer_text())
+        marker.display = True
+        quiet.display = False
         if show_editor:
             self._sync_editor_height()
 
@@ -314,6 +396,49 @@ class Cell(Horizontal):
         visual_line_count = editor.wrapped_document.height
         editor.styles.height = max(4, visual_line_count + 2)
 
+    def _bracket_marker(self) -> str:
+        """Idle prompt beside the cell. Markdown cells have no bracket marker."""
+        if self.model.cell_type == "markdown":
+            return ""
+        return "[ ]"
+
+    def _update_marker(self) -> None:
+        """Show the execution count, or the idle prompt for a cell that has not run."""
+        if self.model.cell_type == "code" and self.model.execution_count is not None:
+            label = f"[{self.model.execution_count}]"
+        else:
+            label = self._bracket_marker()
+        self.query_one(".marker", Static).update(label)
+
+    async def adopt_model(self, model: CellModel, *, keep_editor_text: bool) -> None:
+        """Point this widget at ``model`` and refresh outputs and source.
+
+        ``keep_editor_text`` is set for the cell currently being edited. The
+        editor text, cursor, and vim mode stay as the user left them.
+        ``apply_presentation`` is skipped in that case: assigning
+        ``TextArea.language`` rebuilds the document and jumps the cursor to
+        the start, even when the language did not change.
+        """
+        editor = self.query_one(VimTextArea)
+        if keep_editor_text:
+            model.set_source(editor.text)
+        source_changed = not keep_editor_text and editor.text != model.source
+        outputs_changed = self.model.outputs != model.outputs
+        self.model = model
+        self.language = "markdown" if model.cell_type == "markdown" else "python"
+        if source_changed:
+            editor.load_text(model.source)
+        output = self.query_one(OutputView)
+        if model.cell_type == "code":
+            if outputs_changed:
+                await output.update_outputs(model.outputs)
+        elif output.outputs:
+            output.clear_outputs()
+        self._update_marker()
+        if keep_editor_text:
+            return
+        self.apply_presentation()
+
     def set_running(self) -> None:
         self.model.clear_duration()
         self.query_one(".marker", Static).update("[*]")
@@ -331,7 +456,7 @@ class Cell(Horizontal):
         await self.query_one(OutputView).update_outputs(result_outputs)
         count = execution_count if execution_count is not None else "-"
         self.query_one(".marker", Static).update(f"[{count}]")
-        self._refresh_footer()
+        self.apply_presentation()
 
     def set_error(self) -> None:
         self.query_one(".marker", Static).update("[!]")
@@ -486,9 +611,210 @@ class CellContainer(VerticalScroll):
         focused = self.get_focused_cell()
         return bool(cells) and focused is cells[-1]
 
+    def editing_cell(self) -> Cell | None:
+        for cell in self.query(".notebook-cell"):
+            if isinstance(cell, Cell) and cell._editing:
+                return cell
+        return None
+
+    async def sync_from_disk(
+        self,
+        loaded: NotebookModel,
+        *,
+        preserve: tuple[str, str] | None = None,
+    ) -> bool:
+        """Rebuild the open notebook from ``loaded``.
+
+        Cells are matched by id, so an external insert, delete, or reorder
+        updates the widgets in place. When a cell is being edited, its editor
+        text is kept and the other cells still reload. ``preserve`` does the
+        same for a cell that just left edit mode, but lets a type change from
+        disk through.
+
+        Returns True when the edited cell's type on disk was held back so the
+        editor could stay open. The caller should apply that type after the
+        user returns to navigation.
+        """
+        editing = self.editing_cell()
+        cursor = None
+        type_held = False
+        if editing is not None:
+            editor = editing.query_one(VimTextArea)
+            cursor = editor.cursor_location
+            type_held = self._keep_edit(loaded, editing)
+
+        if preserve is not None:
+            self._keep_source(loaded, preserve[0], preserve[1])
+
+        if self._notebook_matches(loaded):
+            if editing is not None and cursor is not None:
+                self._restore_edit_focus(editing, cursor)
+            return type_held
+
+        focus = self.get_focused_cell()
+        focus_id = focus.model.id if focus is not None else None
+        focus_index = (
+            self.notebook.cells.index(focus.model)
+            if focus is not None and focus.model in self.notebook.cells
+            else 0
+        )
+        scroll_y = self.scroll_y
+
+        existing: dict[str, Cell] = {}
+        for cell in self.query(".notebook-cell"):
+            if (
+                isinstance(cell, Cell)
+                and cell.model.id
+                and cell.model.id not in existing
+            ):
+                existing[cell.model.id] = cell
+
+        ordered: list[Cell] = []
+        seen: set[str] = set()
+        for model in loaded.cells:
+            if not model.id or model.id in seen:
+                continue
+            seen.add(model.id)
+            widget = existing.get(model.id)
+            keep_text = widget is not None and widget is editing
+            if widget is None or (
+                widget.model.cell_type != model.cell_type and not keep_text
+            ):
+                widget = self.create_cell(model)
+            else:
+                await widget.adopt_model(model, keep_editor_text=keep_text)
+            ordered.append(widget)
+
+        self.notebook.cells = [cell.model for cell in ordered]
+        self.notebook.metadata = dict(loaded.metadata)
+        async with self.batch():
+            await self._arrange(ordered)
+
+        if editing is not None:
+            kept = next(
+                (cell for cell in ordered if cell.model.id == editing.model.id), None
+            )
+            if kept is not None and cursor is not None:
+                self._restore_edit_focus(kept, cursor)
+            return type_held
+
+        self._restore_navigation_focus(ordered, focus_id, focus_index)
+        self.scroll_to(0, scroll_y, animate=False)
+        return False
+
+    def _keep_edit(self, loaded: NotebookModel, editing: Cell) -> bool:
+        """Overwrite the disk copy of the focused cell with the unsaved edit.
+
+        Returns True when the file changed this cell's type and that change
+        was held back so the open editor stays put.
+        """
+        editor = editing.query_one(VimTextArea)
+        source = editor.text
+        old_index = (
+            self.notebook.cells.index(editing.model)
+            if editing.model in self.notebook.cells
+            else 0
+        )
+        match = next(
+            (cell for cell in loaded.cells if cell.id == editing.model.id), None
+        )
+        if match is None:
+            editing.model.source = source
+            loaded.cells.insert(min(old_index, len(loaded.cells)), editing.model)
+            return False
+        held_type = match.cell_type != editing.model.cell_type
+        if held_type:
+            # Switching type now would close the editor under the caret.
+            # Hold the current type and apply the disk type once edit ends.
+            match.cell_type = editing.model.cell_type
+            match.outputs = editing.model.outputs
+            match.execution_count = editing.model.execution_count
+        match.source = source
+        return held_type
+
+    def _keep_source(self, loaded: NotebookModel, cell_id: str, source: str) -> None:
+        """Keep ``source`` on ``cell_id`` without pinning its cell type."""
+        match = next((cell for cell in loaded.cells if cell.id == cell_id), None)
+        if match is not None:
+            match.source = source
+            return
+        current = next(
+            (
+                cell
+                for cell in self.query(".notebook-cell")
+                if isinstance(cell, Cell) and cell.model.id == cell_id
+            ),
+            None,
+        )
+        if current is None:
+            loaded.cells.insert(0, CellModel(id=cell_id, source=source))
+            return
+        current.model.source = source
+        old_index = (
+            self.notebook.cells.index(current.model)
+            if current.model in self.notebook.cells
+            else 0
+        )
+        loaded.cells.insert(min(old_index, len(loaded.cells)), current.model)
+
+    def _notebook_matches(self, loaded: NotebookModel) -> bool:
+        current_ids = [cell.model.id for cell in self.query(".notebook-cell")]
+        loaded_ids = [cell.id for cell in loaded.cells]
+        if current_ids != loaded_ids or self.notebook.metadata != loaded.metadata:
+            return False
+        widgets = {
+            cell.model.id: cell
+            for cell in self.query(".notebook-cell")
+            if isinstance(cell, Cell)
+        }
+        for model in loaded.cells:
+            widget = widgets.get(model.id)
+            if widget is None or not widget.model.same_payload(model):
+                return False
+        return True
+
+    async def _arrange(self, ordered: list[Cell]) -> None:
+        incoming = [cell for cell in ordered if cell.parent is not self]
+        if incoming:
+            await self.mount(*incoming)
+        keep = set(ordered)
+        for child in list(self.children):
+            if child not in keep:
+                await child.remove()
+        for index, cell in enumerate(ordered):
+            if index >= len(self.children):
+                break
+            if index == 0:
+                if self.children[0] is not cell:
+                    self.move_child(cell, before=0)
+                continue
+            if self.children.index(cell) != index:
+                self.move_child(cell, after=ordered[index - 1])
+
+    def _restore_edit_focus(self, cell: Cell, cursor: tuple[int, int]) -> None:
+        editor = cell.query_one(VimTextArea)
+        if editor.cursor_location != cursor:
+            editor.move_cursor(cursor)
+        if self.app.focused is not editor:
+            editor.focus()
+
+    def _restore_navigation_focus(
+        self, ordered: list[Cell], focus_id: str | None, focus_index: int
+    ) -> None:
+        if not ordered:
+            return
+        if focus_id is not None:
+            for cell in ordered:
+                if cell.model.id == focus_id:
+                    cell.focus()
+                    return
+        ordered[max(0, min(focus_index, len(ordered) - 1))].focus()
+
 
 class NbVim(App):
     CSS_PATH = Path(__file__).with_name("app.tcss")
+    # Tests stretch this so a timer cannot reload the notebook mid-assertion.
+    RELOAD_INTERVAL = _RELOAD_POLL_SECONDS
     _delete_pending = False
     _delete_timer = None
 
@@ -504,6 +830,18 @@ class NbVim(App):
         self.save_on_exit = True
         self.kernel = ProjectKernel(path or Path.cwd())
         self._cell_running = False
+        self._notebook_watch = None
+        self._disk_signature: tuple[int, int] | None = None
+        self._disk_digest: str | None = None
+        self._failed_signature: tuple[int, int] | None = None
+        self._failed_retries = 0
+        self._polling = False
+        self._reload_pending = False
+        self._resync_edited_cell = False
+        self._force_disk_read = False
+        self._preserve_source: tuple[str, str] | None = None
+        # "edit" is the working notebook. "preview" is the reading view.
+        self.view_mode = "edit"
 
     BINDINGS = [
         Binding("b", "add_cell", "Add cell"),
@@ -516,11 +854,13 @@ class NbVim(App):
         Binding("r", "run_cell", "Run cell and go to next"),
         Binding("shift+r", "run_cell_stay", "Run cell and stay"),
         Binding("m", "toggle_cell_type", "Switch markdown/python"),
+        Binding("p", "toggle_preview", "Toggle preview"),
         Binding("enter", "edit_cell", "Edit cell"),
         Binding("escape", "navigate_cell", "Navigate cells"),
     ]
 
     def compose(self) -> ComposeResult:
+        yield Static(self.view_mode, id="mode-status")
         yield CellContainer(self.notebook, id="cells")
         yield Input(id="command-bar")
 
@@ -531,6 +871,13 @@ class NbVim(App):
         # focuses a cell, so the very first j/k/r press on a fresh notebook
         # does nothing. Focus the first cell directly so navigation and
         # running work immediately.
+        self._capture_disk_snapshot()
+        if self.path is not None:
+            self._notebook_watch = self.set_interval(
+                self.RELOAD_INTERVAL,
+                self._poll_notebook_file,
+                name="notebook-file-watch",
+            )
         self.query_one(CellContainer).focus_relative_cell(1)
 
     def on_key(self, event: Key) -> None:
@@ -566,6 +913,8 @@ class NbVim(App):
         elif command == "q!":
             self.save_on_exit = False
             self.exit()
+        elif command == "preview":
+            self.action_toggle_preview()
         else:
             self.notify(f"Not an nbvim command: :{command}", severity="error")
             command_bar.styles.display = "block"
@@ -579,6 +928,104 @@ class NbVim(App):
             self.notify("No notebook path specified", severity="error")
             return
         self.notebook.save(self.path)
+        # Remember the bytes we just wrote. The watcher compares digests, so
+        # this save (and a later timestamp-only touch of the same bytes) does
+        # not reload the UI and cannot loop.
+        self._capture_disk_snapshot()
+
+    def _capture_disk_snapshot(self) -> None:
+        if self.path is None:
+            return
+        signature = _disk_signature(self.path)
+        digest = _file_digest(self.path)
+        if signature is None or digest is None:
+            return
+        self._disk_signature = signature
+        self._disk_digest = digest
+        self._failed_signature = None
+        self._failed_retries = 0
+
+    async def _poll_notebook_file(self) -> None:
+        """Reload the open notebook when another process writes it."""
+        if self.path is None or self._polling:
+            return
+        self._polling = True
+        try:
+            await self._poll_notebook_file_body()
+        finally:
+            self._polling = False
+
+    async def _poll_notebook_file_body(self) -> None:
+        path = self.path
+        if path is None:
+            return
+        signature = _disk_signature(path)
+        if signature is None:
+            return
+        retrying = (
+            signature == self._failed_signature
+            and self._failed_retries < _UNREADABLE_RETRIES
+        )
+        unchanged = (
+            signature == self._disk_signature
+            and not self._force_disk_read
+            and not retrying
+        )
+        if unchanged:
+            return
+        if self._cell_running and not self._force_disk_read:
+            # The running cell widget has to stay mounted until set_result.
+            # Leave the snapshot where it is so the next poll still sees this
+            # write, and apply it when the run finishes.
+            self._reload_pending = True
+            return
+        digest = _file_digest(path)
+        if digest is None:
+            return
+        if digest == self._disk_digest and not self._force_disk_read:
+            self._disk_signature = signature
+            self._failed_signature = None
+            self._failed_retries = 0
+            return
+        try:
+            loaded = NotebookModel.load(path)
+        except (OSError, ValueError, nbformat.NBFormatError):
+            # A writer may still be mid-save. Retry a couple of times, then
+            # wait until the signature changes again.
+            if signature != self._failed_signature:
+                self._failed_signature = signature
+                self._failed_retries = 1
+            else:
+                self._failed_retries += 1
+            return
+        self._failed_signature = None
+        self._failed_retries = 0
+        self._disk_signature = signature
+        self._disk_digest = digest
+        self._force_disk_read = False
+        preserve = self._preserve_source
+        self._preserve_source = None
+        await self._apply_disk_notebook(loaded, preserve=preserve)
+
+    async def _apply_disk_notebook(
+        self,
+        loaded: NotebookModel,
+        *,
+        preserve: tuple[str, str] | None = None,
+    ) -> None:
+        container = self.query_one(CellContainer)
+        type_held = await container.sync_from_disk(loaded, preserve=preserve)
+        if type_held:
+            self._resync_edited_cell = True
+
+    async def on_cell_edit_finished(self, event: Cell.EditFinished) -> None:
+        """Apply a type change that was held back while the cell was edited."""
+        if not self._resync_edited_cell:
+            return
+        self._resync_edited_cell = False
+        self._force_disk_read = True
+        self._preserve_source = (event.cell_id, event.source)
+        await self._poll_notebook_file()
 
     def _is_editing(self) -> bool:
         return isinstance(self.focused, TextArea)
@@ -618,7 +1065,26 @@ class NbVim(App):
     def action_edit_cell(self) -> None:
         if self._is_editing():
             return
+        # Leave the reading view first so Enter still opens the vim editor.
+        if self.view_mode == "preview":
+            self._set_view_mode("edit")
         self.query_one(CellContainer).edit_focused_cell()
+
+    def action_toggle_preview(self) -> None:
+        """Switch between the edit notebook and the reading preview.
+
+        Preview hides code source and vim chrome. It does not enter vim
+        insert; that still happens from the edit view with Enter.
+        """
+        if self._is_editing():
+            return
+        self._set_view_mode("edit" if self.view_mode == "preview" else "preview")
+
+    def _set_view_mode(self, mode: str) -> None:
+        self.view_mode = mode
+        self.query_one("#mode-status", Static).update(mode)
+        for cell in self.query(Cell):
+            cell.apply_presentation()
 
     def action_navigate_cell(self) -> None:
         self.query_one(CellContainer).navigate_focused_cell()
@@ -669,6 +1135,9 @@ class NbVim(App):
             return False
         finally:
             self._cell_running = False
+            if self._reload_pending:
+                self._reload_pending = False
+                self.call_later(self._poll_notebook_file)
 
     async def _advance_after_run(self) -> None:
         container = self.query_one(CellContainer)

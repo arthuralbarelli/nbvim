@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,15 @@ def _nbvim_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return current
 
 
+def _new_cell_id() -> str:
+    """Return a notebook cell id nbformat will accept.
+
+    Matches ``nbformat``'s own ids (8 hex characters) so reloads can match a
+    cell in the UI to the same cell in the file.
+    """
+    return uuid.uuid4().hex[:8]
+
+
 @dataclass
 class CellModel:
     """A cell in a notebook.
@@ -48,6 +58,11 @@ class CellModel:
     metadata: dict[str, Any] = field(default_factory=dict)
     outputs: list[Any] = field(default_factory=list)
     execution_count: int | None = None
+    id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            self.id = _new_cell_id()
 
     @classmethod
     def from_nbformat(cls, cell: NotebookNode) -> "CellModel":
@@ -57,6 +72,7 @@ class CellModel:
             metadata=dict(cell.get("metadata", {})),
             outputs=list(cell.get("outputs", [])),
             execution_count=cell.get("execution_count"),
+            id=cell.get("id") or None,
         )
 
     def to_nbformat(self) -> NotebookNode:
@@ -66,13 +82,16 @@ class CellModel:
                 metadata=self.metadata,
                 outputs=self.outputs,
                 execution_count=self.execution_count,
+                id=self.id,
             )
         if self.cell_type == "markdown":
             return nbformat.v4.new_markdown_cell(
-                source=self.source, metadata=self.metadata
+                source=self.source, metadata=self.metadata, id=self.id
             )
         if self.cell_type == "raw":
-            return nbformat.v4.new_raw_cell(source=self.source, metadata=self.metadata)
+            return nbformat.v4.new_raw_cell(
+                source=self.source, metadata=self.metadata, id=self.id
+            )
         raise ValueError(f"Unsupported cell type: {self.cell_type!r}")
 
     def clone(self) -> "CellModel":
@@ -119,6 +138,17 @@ class CellModel:
         self.source = source
         self.clear_duration()
         return had_duration
+
+    def same_payload(self, other: "CellModel") -> bool:
+        """Whether two cells would look the same in the notebook UI."""
+        return (
+            self.id == other.id
+            and self.cell_type == other.cell_type
+            and self.source == other.source
+            and self.outputs == other.outputs
+            and self.execution_count == other.execution_count
+            and self.metadata == other.metadata
+        )
 
 
 @dataclass
@@ -168,6 +198,14 @@ class NotebookModel:
 
     def remove_cell(self, index: int) -> CellModel:
         return self.cells.pop(index)
+
+    def same_payload(self, other: "NotebookModel") -> bool:
+        """Whether two notebooks would look the same in the UI."""
+        if self.metadata != other.metadata or len(self.cells) != len(other.cells):
+            return False
+        return all(
+            left.same_payload(right) for left, right in zip(self.cells, other.cells)
+        )
 
     def __iter__(self) -> Iterable[CellModel]:
         return iter(self.cells)

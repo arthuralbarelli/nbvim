@@ -68,9 +68,18 @@ Bindings apply in navigation mode unless noted.
 | `r` | Run the focused code cell and go to the next cell |
 | `R` | Run the focused code cell and stay |
 | `m` | Switch cell between markdown and Python |
+| `p` | Toggle edit / preview |
 | `:` | Open the command bar |
 
 `r` on the last cell inserts a new code cell below and focuses it. A failed run stays on the current cell. On markdown, `r` / `R` skip the kernel: `r` still advances, `R` stays.
+
+### Preview
+
+`p` or `:preview`, from navigation, switches the notebook between edit and preview. The header shows `edit` or `preview`.
+
+Edit is the working notebook: cell source, the editor, and vim mode. Preview is a reading view of the finished note. Markdown stays rendered. A code cell shows its outputs (text, tables, and images) and hides its source, the editor, and the vim footer. A code cell with no output is a single blank line.
+
+Preview is not vim insert. `Enter` leaves preview and opens the focused cell in the existing editor.
 
 ### Edit mode
 
@@ -97,8 +106,15 @@ In Visual, `d`/`x` delete the selection, `y` yanks it, and `c` deletes it and en
 | `:q` | Quit without saving |
 | `:wq` | Save and quit |
 | `:q!` | Quit without saving |
+| `:preview` | Toggle edit / preview |
 
 Leaving the UI any other way saves the notebook automatically.
+
+## Live reload
+
+nbvim watches the open notebook. When the file changes on disk, cells, outputs, and execution counts reload into the current UI. A save nbvim itself writes (`:w`, `:wq`, or the save on exit) does not reload again.
+
+If you are in the middle of editing a cell, that unsaved text stays in the editor and the other cells still reload. A change to the type of the cell you are editing waits until you return to navigation, and the text you typed is kept.
 
 ## Kernel
 
