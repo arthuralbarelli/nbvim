@@ -7,6 +7,7 @@ import base64
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,13 @@ _PYTHON_CANDIDATES = (
 
 
 class KernelExecutionError(RuntimeError):
-    """Raised when the project Python kernel cannot be started or contacted."""
+    """Raised when the project Python kernel cannot be started or contacted.
+
+    ``duration_s`` is set by ``ProjectKernel.execute`` when the failure happens
+    during a cell run, using the same clock as a successful result.
+    """
+
+    duration_s: float | None = None
 
 
 def project_root_for(notebook_path: str | Path) -> Path:
@@ -131,10 +138,16 @@ def _encode_binary_mime_data(data: object) -> dict[str, Any]:
 
 @dataclass
 class ExecutionResult:
-    """Outputs and execution count returned by one kernel execution."""
+    """Outputs and execution count returned by one kernel execution.
+
+    ``duration_s`` is the single measurement of the run: from the moment
+    execution begins until the outputs or the error are in hand. The first
+    call also includes kernel startup.
+    """
 
     outputs: list[NotebookNode]
     execution_count: int | None
+    duration_s: float = 0.0
 
 
 class ProjectKernel:
@@ -191,10 +204,22 @@ class ProjectKernel:
         await self._run(_RETINA_STARTUP, store_history=False, silent=True)
 
     async def execute(self, source: str) -> ExecutionResult:
-        """Execute source and collect all notebook-compatible kernel outputs."""
+        """Execute source and collect all notebook-compatible kernel outputs.
+
+        This is the only place a cell run is timed. The clock starts before
+        kernel startup and stops when outputs (including an error output) are
+        collected, or when startup or the kernel fails.
+        """
         async with self._execution_lock:
-            await self.start()
-            return await self._run(source, store_history=True, silent=False)
+            started = time.perf_counter()
+            try:
+                await self.start()
+                result = await self._run(source, store_history=True, silent=False)
+            except KernelExecutionError as exc:
+                exc.duration_s = max(0.0, time.perf_counter() - started)
+                raise
+            result.duration_s = max(0.0, time.perf_counter() - started)
+            return result
 
     async def _run(
         self,

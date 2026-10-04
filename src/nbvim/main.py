@@ -21,7 +21,7 @@ from textual_image.widget import Image as _AutoImage
 from textual_image.widget._base import Image as _BaseImage
 
 from .kernel import KernelExecutionError, ProjectKernel
-from .model import CellModel, NotebookModel
+from .model import CellModel, NotebookModel, format_duration
 from .vim_editor import VimTextArea
 
 
@@ -250,6 +250,7 @@ class Cell(Horizontal):
         self.model = model or CellModel()
         self.language = "markdown" if self.model.cell_type == "markdown" else language
         self._editing = False
+        self._ready = False
 
     def compose(self) -> ComposeResult:
         is_markdown = self.model.cell_type == "markdown"
@@ -276,10 +277,14 @@ class Cell(Horizontal):
     def on_mount(self) -> None:
         self._update_marker()
         self.apply_presentation()
+        self._ready = True
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Keep the notebook model and cell height in sync with the editor."""
-        self.model.source = event.text_area.text
+        if self._ready and self.model.set_source(event.text_area.text):
+            self._refresh_footer()
+        elif not self._ready:
+            self.model.source = event.text_area.text
         visual_line_count = event.text_area.wrapped_document.height
         event.text_area.styles.height = max(4, visual_line_count + 2)
 
@@ -301,7 +306,7 @@ class Cell(Horizontal):
 
     def on_vim_text_area_mode_changed(self, event: VimTextArea.ModeChanged) -> None:
         """Keep the footer in sync with Insert / Normal / Visual."""
-        self.query_one(".cell-footer", Static).update(self._footer_text())
+        self._refresh_footer()
         event.stop()
 
     def on_vim_text_area_exit_to_navigation(
@@ -374,11 +379,17 @@ class Cell(Horizontal):
         if show_editor:
             self._sync_editor_height()
 
+    def _refresh_footer(self) -> None:
+        self.query_one(".cell-footer", Static).update(self._footer_text())
+
     def _footer_text(self) -> str:
         if self._editing:
             mode = self.query_one(VimTextArea).vim_mode.value
             return f"{self.language}  -- {mode} --"
-        return self.language
+        duration = self.model.duration_s() if self.model.cell_type == "code" else None
+        if duration is None:
+            return self.language
+        return f"{self.language}  {format_duration(duration)}"
 
     def _sync_editor_height(self) -> None:
         editor = self.query_one(TextArea)
@@ -410,7 +421,7 @@ class Cell(Horizontal):
         """
         editor = self.query_one(VimTextArea)
         if keep_editor_text:
-            model.source = editor.text
+            model.set_source(editor.text)
         source_changed = not keep_editor_text and editor.text != model.source
         outputs_changed = self.model.outputs != model.outputs
         self.model = model
@@ -429,13 +440,19 @@ class Cell(Horizontal):
         self.apply_presentation()
 
     def set_running(self) -> None:
+        self.model.clear_duration()
         self.query_one(".marker", Static).update("[*]")
+        self._refresh_footer()
 
     async def set_result(
-        self, result_outputs: list[object], execution_count: int | None
+        self,
+        result_outputs: list[object],
+        execution_count: int | None,
+        duration_s: float,
     ) -> None:
         self.model.outputs = result_outputs
         self.model.execution_count = execution_count
+        self.model.record_duration_s(duration_s)
         await self.query_one(OutputView).update_outputs(result_outputs)
         count = execution_count if execution_count is not None else "-"
         self.query_one(".marker", Static).update(f"[{count}]")
@@ -1105,9 +1122,14 @@ class NbVim(App):
         cell.set_running()
         try:
             result = await self.kernel.execute(cell.model.source)
-            await cell.set_result(result.outputs, result.execution_count)
+            await cell.set_result(
+                result.outputs, result.execution_count, result.duration_s
+            )
             return True
         except KernelExecutionError as exc:
+            if exc.duration_s is not None:
+                cell.model.record_duration_s(exc.duration_s)
+                cell._refresh_footer()
             cell.set_error()
             self.notify(str(exc), severity="error", timeout=8)
             return False

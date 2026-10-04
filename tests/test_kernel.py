@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import os
@@ -33,7 +34,7 @@ from nbvim.main import (
     format_output,
     render_output,
 )
-from nbvim.model import CellModel, NotebookModel
+from nbvim.model import CellModel, NotebookModel, format_duration
 
 
 def _make_executable(path: Path) -> Path:
@@ -140,8 +141,10 @@ class KernelExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(first.execution_count, 1)
                 self.assertEqual(first.outputs[0]["output_type"], "stream")
                 self.assertEqual(first.outputs[0]["text"], "hello\n")
+                self.assertGreater(first.duration_s, 0)
                 self.assertEqual(second.execution_count, 2)
                 self.assertEqual(second.outputs[0]["data"]["text/plain"], "42")
+                self.assertGreater(second.duration_s, 0)
             finally:
                 await kernel.shutdown()
 
@@ -215,6 +218,44 @@ class KernelExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("ValueError", "\n".join(result.outputs[0]["traceback"]))
             finally:
                 await kernel.shutdown()
+
+    async def test_execute_duration_includes_kernel_startup(self) -> None:
+        kernel = ProjectKernel(Path("example.ipynb"), python=sys.executable)
+
+        async def slow_start() -> None:
+            await asyncio.sleep(0.05)
+            kernel.manager = object()
+            kernel.client = object()
+
+        async def slow_run(
+            source: str, *, store_history: bool, silent: bool
+        ) -> ExecutionResult:
+            await asyncio.sleep(0.05)
+            return ExecutionResult([], 1)
+
+        kernel.start = slow_start  # type: ignore[method-assign]
+        kernel._run = slow_run  # type: ignore[method-assign]
+
+        result = await kernel.execute("1 + 1")
+
+        self.assertGreaterEqual(result.duration_s, 0.09)
+        self.assertLess(result.duration_s, 1)
+
+    async def test_failed_start_keeps_duration_on_the_error(self) -> None:
+        kernel = ProjectKernel(Path("example.ipynb"), python=sys.executable)
+
+        async def fail_start() -> None:
+            await asyncio.sleep(0.02)
+            raise KernelExecutionError("kernel did not start")
+
+        kernel.start = fail_start  # type: ignore[method-assign]
+
+        with self.assertRaises(KernelExecutionError) as raised:
+            await kernel.execute("1")
+
+        self.assertIsNotNone(raised.exception.duration_s)
+        assert raised.exception.duration_s is not None
+        self.assertGreater(raised.exception.duration_s, 0)
 
     async def test_start_without_environment_raises(self) -> None:
         with patch.dict(os.environ):
@@ -520,11 +561,111 @@ class CellTypeTests(unittest.IsolatedAsyncioTestCase):
 
             idle_code.set_running()
             self.assertEqual(marker(idle_code), "[*]")
-            await idle_code.set_result([], 7)
+            await idle_code.set_result([], 7, 0.0)
             self.assertEqual(marker(idle_code), "[7]")
             idle_code.set_error()
             self.assertEqual(marker(idle_code), "[!]")
             self.assertEqual(marker(markdown_cell), "")
+
+
+class DurationTests(unittest.IsolatedAsyncioTestCase):
+    def test_format_duration_buckets(self) -> None:
+        self.assertEqual(format_duration(1.24), "1.2s")
+        self.assertEqual(format_duration(9.94), "9.9s")
+        self.assertEqual(format_duration(10), "10s")
+        self.assertEqual(format_duration(10.9), "10s")
+        self.assertEqual(format_duration(59.9), "59s")
+        self.assertEqual(format_duration(60), "60s")
+        self.assertEqual(format_duration(65), "1m 05s")
+        self.assertEqual(format_duration(125), "2m 05s")
+
+    def test_duration_round_trips_through_ipynb(self) -> None:
+        cell = CellModel(source="print(1)", metadata={"tags": ["keep"]})
+        cell.record_duration_s(1.2)
+        self.assertEqual(cell.metadata["nbvim"]["duration_ms"], 1200)
+        self.assertEqual(cell.duration_s(), 1.2)
+
+        notebook = NotebookModel(cells=[cell])
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "timed.ipynb"
+            notebook.save(path)
+            loaded = NotebookModel.load(path)
+
+        loaded_cell = loaded.cells[0]
+        self.assertEqual(loaded_cell.metadata["nbvim"]["duration_ms"], 1200)
+        self.assertEqual(loaded_cell.metadata["tags"], ["keep"])
+        self.assertEqual(loaded_cell.duration_s(), 1.2)
+        self.assertTrue(loaded_cell.set_source("print(2)"))
+        self.assertIsNone(loaded_cell.duration_s())
+        self.assertNotIn("nbvim", loaded_cell.metadata)
+        self.assertEqual(loaded_cell.metadata["tags"], ["keep"])
+        self.assertEqual(loaded_cell.source, "print(2)")
+
+    async def test_footer_shows_duration_and_marker_stays_count(self) -> None:
+        class FakeKernel:
+            async def execute(self, source: str) -> ExecutionResult:
+                return ExecutionResult(
+                    [new_output("stream", name="stdout", text=source)],
+                    execution_count=1,
+                    duration_s=1.2,
+                )
+
+            async def shutdown(self) -> None:
+                pass
+
+        app = NbVim(NotebookModel(cells=[CellModel(source="print('ok')")]))
+        app.kernel = FakeKernel()
+        async with app.run_test() as pilot:
+            cell = app.query_one("Cell")
+            cell.focus()
+            await pilot.pause()
+            await app.run_action("run_cell_stay")
+            await pilot.pause()
+
+            self.assertEqual(cell.model.metadata["nbvim"]["duration_ms"], 1200)
+            self.assertEqual(
+                str(cell.query_one(".cell-footer", Static).render()), "python  1.2s"
+            )
+            self.assertEqual(str(cell.query_one(".marker", Static).render()), "[1]")
+
+    async def test_stored_duration_shows_in_the_footer(self) -> None:
+        cell_model = CellModel(source="print(1)")
+        cell_model.record_duration_s(65)
+        app = NbVim(NotebookModel(cells=[cell_model]))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            cell = app.query_one("Cell")
+            self.assertEqual(
+                str(cell.query_one(".cell-footer", Static).render()), "python  1m 05s"
+            )
+            self.assertEqual(cell.model.metadata["nbvim"]["duration_ms"], 65000)
+
+    async def test_editing_source_clears_duration(self) -> None:
+        cell_model = CellModel(source="print(1)")
+        cell_model.record_duration_s(1.2)
+        app = NbVim(NotebookModel(cells=[cell_model]))
+        async with app.run_test() as pilot:
+            cell = app.query_one("Cell")
+            cell.focus()
+            await pilot.pause()
+            self.assertEqual(
+                str(cell.query_one(".cell-footer", Static).render()), "python  1.2s"
+            )
+
+            await app.run_action("edit_cell")
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+
+            self.assertIsNone(cell.model.duration_s())
+            self.assertNotIn("nbvim", cell.model.metadata)
+
+            await pilot.press("escape")
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(
+                str(cell.query_one(".cell-footer", Static).render()), "python"
+            )
 
 
 if __name__ == "__main__":
