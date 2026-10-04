@@ -218,7 +218,7 @@ class Cell(Horizontal):
         editor.display = not is_markdown
         output = OutputView(self.model.outputs, classes="cell-output")
         output.display = not is_markdown
-        yield Static("[ ]", classes="marker")
+        yield Static(self._bracket_marker(), classes="marker")
         with Vertical(classes="cell-editor"):
             yield markdown
             yield editor
@@ -271,7 +271,7 @@ class Cell(Horizontal):
             self.model.outputs = []
             self.model.execution_count = None
             self.query_one(OutputView).clear_outputs()
-            self.query_one(".marker", Static).update("[ ]")
+        self.query_one(".marker", Static).update(self._bracket_marker())
         self._editing = False
         self.apply_presentation()
 
@@ -301,6 +301,12 @@ class Cell(Horizontal):
         editor = self.query_one(TextArea)
         visual_line_count = editor.wrapped_document.height
         editor.styles.height = max(4, visual_line_count + 2)
+
+    def _bracket_marker(self) -> str:
+        """Idle prompt beside the cell. Markdown cells have no bracket marker."""
+        if self.model.cell_type == "markdown":
+            return ""
+        return "[ ]"
 
     def set_running(self) -> None:
         self.query_one(".marker", Static).update("[*]")
