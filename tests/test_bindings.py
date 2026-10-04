@@ -52,6 +52,7 @@ class CellModelCloneTests(unittest.TestCase):
         self.assertEqual(cell.metadata, {"tag": "a"})
         self.assertEqual(cell.outputs, [{"text": "1"}])
         self.assertEqual(cell.execution_count, 3)
+        self.assertNotEqual(clone.id, cell.id)
 
 
 class ClipboardTests(unittest.IsolatedAsyncioTestCase):

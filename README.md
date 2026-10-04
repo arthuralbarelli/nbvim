@@ -100,6 +100,12 @@ In Visual, `d`/`x` delete the selection, `y` yanks it, and `c` deletes it and en
 
 Leaving the UI any other way saves the notebook automatically.
 
+## Live reload
+
+nbvim watches the open notebook. When the file changes on disk, cells, outputs, and execution counts reload into the current UI. A save nbvim itself writes (`:w`, `:wq`, or the save on exit) does not reload again.
+
+If you are in the middle of editing a cell, that unsaved text stays in the editor and the other cells still reload. A change to the type of the cell you are editing waits until you return to navigation, and the text you typed is kept.
+
 ## Kernel
 
 `r` executes the focused code cell in a persistent Jupyter Python kernel.
